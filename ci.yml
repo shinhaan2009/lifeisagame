@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt pytest
+      - name: Syntax check
+        run: python -m compileall app.py academic_planner
+      - name: Import check (catches undeclared dependencies)
+        run: python -c "import academic_planner.pages.dashboard, academic_planner.pages.decisions, academic_planner.pages.labs, academic_planner.pages.profile, academic_planner.pages.schools, academic_planner.pages.timeline"
+      - name: Run tests
+        run: pytest -q
