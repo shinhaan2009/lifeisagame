@@ -1,0 +1,238 @@
+{
+  "_note": "v0.1 밸런스 가정치. 시간 단위 초. rate = 초당 반응 횟수.",
+  "tickHz": 10,
+  "caps": {
+    "glucose": 40,
+    "o2": 30,
+    "amino": 40,
+    "atp": 300,
+    "pyruvate": 20,
+    "protein": 80,
+    "waste": 60
+  },
+  "start": {
+    "glucose": 10,
+    "o2": 10,
+    "amino": 6,
+    "atp": 80,
+    "pyruvate": 0,
+    "protein": 12,
+    "waste": 0
+  },
+  "environment": {
+    "o2Normal": 1.0,
+    "o2DiffusionPerSec": 2.0,
+    "glucoseSupply": 1.0,
+    "glucosePassivePerSec": 0.3
+  },
+  "glycolysis": {
+    "rate": 2.0,
+    "in": {
+      "glucose": 1
+    },
+    "out": {
+      "pyruvate": 2,
+      "atp": 2
+    }
+  },
+  "fermentation": {
+    "rate": 4.0,
+    "in": {
+      "pyruvate": 2
+    },
+    "out": {
+      "waste": 2
+    }
+  },
+  "baseExcretionPerSec": {
+    "prokaryotePerArea": 0.5,
+    "eukaryote": 1.0
+  },
+  "organelles": {
+    "transporter": {
+      "label": "세포막 수송체",
+      "cost": 2,
+      "upkeep": 1.0,
+      "rate": 0.5,
+      "in": {
+        "atp": 1
+      },
+      "out": {
+        "$substrate": 1
+      },
+      "stages": [
+        "prokaryote",
+        "eukaryote"
+      ],
+      "membraneSlot": true
+    },
+    "respChain": {
+      "label": "막 호흡 복합체",
+      "cost": 4,
+      "upkeep": 2.0,
+      "rate": 0.5,
+      "in": {
+        "pyruvate": 2,
+        "o2": 1
+      },
+      "out": {
+        "atp": 28,
+        "waste": 1
+      },
+      "stages": [
+        "prokaryote"
+      ],
+      "membraneSlot": true
+    },
+    "ribosome": {
+      "label": "리보솜",
+      "cost": 3,
+      "upkeep": 2.0,
+      "rate": 0.5,
+      "in": {
+        "amino": 3,
+        "atp": 4
+      },
+      "out": {
+        "protein": 1
+      },
+      "stages": [
+        "prokaryote",
+        "eukaryote"
+      ]
+    },
+    "mitochondrion": {
+      "label": "미토콘드리아",
+      "cost": 8,
+      "upkeep": 3.0,
+      "rate": 0.5,
+      "in": {
+        "pyruvate": 2,
+        "o2": 1
+      },
+      "out": {
+        "atp": 28,
+        "waste": 1
+      },
+      "stages": [
+        "eukaryote"
+      ]
+    },
+    "lysosome": {
+      "label": "리소좀",
+      "cost": 5,
+      "upkeep": 1.5,
+      "rate": 0.5,
+      "in": {
+        "waste": 3
+      },
+      "out": {
+        "amino": 1
+      },
+      "stages": [
+        "eukaryote"
+      ]
+    },
+    "golgi": {
+      "label": "골지체",
+      "cost": 6,
+      "upkeep": 1.5,
+      "rate": 0.4,
+      "in": {
+        "protein": 2
+      },
+      "out": {
+        "$membrane": 1
+      },
+      "stages": [
+        "eukaryote"
+      ],
+      "activeBelowMembrane": 90
+    },
+    "nucleus": {
+      "label": "핵",
+      "cost": 0,
+      "upkeep": 2.0,
+      "rate": 0,
+      "in": {},
+      "out": {},
+      "stages": [],
+      "fixed": true
+    }
+  },
+  "prokaryote": {
+    "startSize": 1,
+    "maxSize": 3,
+    "slotsPerArea": 3,
+    "upkeepPerVolume": 0.5,
+    "growCostPerSize": 6,
+    "startOrganelles": {
+      "transporter": 2,
+      "respChain": 1,
+      "ribosome": 1
+    },
+    "symbiosis": {
+      "proteinCost": 15,
+      "atpCost": 60,
+      "integrationSec": 20
+    }
+  },
+  "eukaryote": {
+    "grantOnSymbiosis": {
+      "mitochondrion": 1,
+      "nucleus": 1
+    },
+    "removeOnSymbiosis": [
+      "respChain"
+    ]
+  },
+  "homeostasis": {
+    "criticalSec": 30,
+    "wasteCriticalRatio": 0.7,
+    "membraneCritical": 30,
+    "membraneMax": 100,
+    "membraneWearPerSec": 0.3,
+    "wasteEfficiency": 0.5,
+    "wasteDamagePerSec": 2.0,
+    "leakFractionPerSec": 0.05,
+    "organelleHp": 100,
+    "nucleusDamagePerSec": 1.5
+  },
+  "win": {
+    "proteinForDivision": 50
+  },
+  "threats": {
+    "warningSec": 15,
+    "firstAtSec": 60,
+    "intervalSec": [
+      45,
+      75
+    ],
+    "hypoxia": {
+      "label": "저산소",
+      "durationSec": 40,
+      "o2Env": 0.15
+    },
+    "starvation": {
+      "label": "영양 결핍",
+      "durationSec": 40,
+      "glucoseFactor": 0.5
+    },
+    "virus": {
+      "label": "바이러스 침입",
+      "durationSec": 20,
+      "particles": 3,
+      "membraneDamagePerParticlePerSec": 0.8,
+      "infiltrateBelowMembrane": 50,
+      "infiltrateChancePerSec": 0.15
+    }
+  },
+  "membraneSynthesis": {
+    "rate": 0.15,
+    "in": {
+      "protein": 1
+    },
+    "membrane": 2,
+    "activeBelowMembrane": 90
+  }
+}

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>세포 관리 시뮬레이션</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* 레이아웃: 좌측 세포 캔버스(조작 영역) + 우측 계기판. 기획서 v0.1 규정대로 흰 배경·검은 글씨/선만 사용. 단일 테마 의도적 고정. */
+:root {
+  --bg: #ffffff;
+  --fg: #000000;
+  --dim: #555555;
+  --line: #000000;
+  --faint: #e6e6e6;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 13px/1.45 var(--sans);
+  display: flex; flex-direction: column;
+}
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  padding-block: 8px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  border-bottom: 1px solid var(--line);
+}
+header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.grow { flex: 1; }
+button {
+  font: inherit; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 0; padding: 4px 10px; cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--fg); color: var(--bg); }
+button:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+button:disabled { color: var(--dim); border-style: dashed; cursor: not-allowed; }
+button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+main {
+  flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px;
+}
+#stage { position: relative; min-height: 360px; min-width: 0; }
+#cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: default; }
+#cv.placing { cursor: crosshair; }
+#hint {
+  position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: 12px; right: 16px;
+  color: var(--dim); pointer-events: none;
+}
+aside {
+  border-left: 1px solid var(--line); overflow-y: auto; min-width: 0;
+  padding-block: 12px; padding-left: 16px; padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 14px;
+}
+section h2 {
+  font-size: 11px; font-weight: 600; letter-spacing: .08em; margin: 0 0 6px;
+  border-bottom: 1px solid var(--line); padding-bottom: 2px;
+}
+.row { display: grid; grid-template-columns: 92px 1fr 74px; align-items: center; gap: 8px; }
+.bar { height: 8px; border: 1px solid var(--line); position: relative; }
+.bar > i { position: absolute; inset: 0 auto 0 0; background: var(--fg); }
+.bar > b { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1px dashed var(--fg); }
+.val { text-align: right; }
+.crit { font-weight: 600; }
+.crit::after { content: " ▲"; }
+.list { display: flex; flex-direction: column; gap: 4px; }
+.build button { width: 100%; text-align: left; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 5px 8px; }
+.build small { grid-column: 1 / -1; color: inherit; opacity: .75; font-family: var(--mono); font-size: 11px; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+#threat { border: 1px solid var(--line); padding: 6px 8px; }
+#threat.alarm { border-width: 3px; }
+#log { font-family: var(--mono); font-size: 11px; color: var(--dim); max-height: 140px; overflow-y: auto; }
+#log div:first-child { color: var(--fg); }
+#overlay {
+  position: absolute; inset: 0; display: grid; place-items: center; background: rgba(255,255,255,.86);
+}
+#overlay div { border: 2px solid var(--line); background: var(--bg); padding: 20px 28px; text-align: center; display: grid; gap: 10px; }
+#overlay strong { font-size: 20px; }
+#legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--dim); }
+@media (max-width: 760px) {
+  body { height: auto; }
+  main { grid-template-columns: 1fr; }
+  #stage { height: 62vh; }
+  aside { border-left: 0; border-top: 1px solid var(--line); padding-left: max(16px, env(safe-area-inset-left, 0px)); }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>세포 관리 시뮬레이션 <span class="mono" style="font-weight:400">v0.1</span></h1>
+  <span id="stageLabel">원핵세포</span>
+  <span class="mono" id="clock">00:00</span>
+  <span class="grow"></span>
+  <button id="pause" aria-pressed="false" title="Space">일시정지</button>
+  <button id="sp1" aria-pressed="true">1×</button>
+  <button id="sp2" aria-pressed="false">2×</button>
+  <button id="restart">재시작</button>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="cv" aria-label="세포 단면"></canvas>
+    <div id="hint">건설 버튼을 누른 뒤 세포 안을 클릭해 배치. 소기관 클릭 시 선택. Esc 취소, Space 일시정지.</div>
+    <div id="overlay" hidden><div><strong id="ovTitle"></strong><span id="ovReason"></span><span class="mono" id="ovStats"></span><button id="ovRestart">다시 시작</button></div></div>
+  </div>
+  <aside>
+    <section><div id="threat">위협 없음</div></section>
+    <section>
+      <h2>항상성</h2>
+      <div class="list" id="homeo"></div>
+    </section>
+    <section>
+      <h2>자원</h2>
+      <div class="list" id="res"></div>
+      <div id="legend"></div>
+    </section>
+    <section>
+      <h2>건설 <span class="mono" style="font-weight:400" id="slots"></span></h2>
+      <div class="list build" id="build"></div>
+    </section>
+    <section>
+      <h2>세포</h2>
+      <div class="actions" id="actions"></div>
+      <div class="mono" id="econ" style="margin-top:6px;font-size:11px"></div>
+    </section>
+    <section id="selBox" hidden>
+      <h2>선택</h2>
+      <div id="sel"></div>
+    </section>
+    <section>
+      <h2>기록</h2>
+      <div id="log"></div>
+    </section>
+  </aside>
+</main>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
