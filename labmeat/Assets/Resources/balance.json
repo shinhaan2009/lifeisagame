@@ -1,0 +1,163 @@
+{
+  "time": {
+    "wakeHour": 7, "earliestSleepHour": 18, "forcedSleepHour": 26, "parcelArrivalHour": 9,
+    "orderStartHour": 8, "orderEndHour": 20, "realSecondsPerGameMinute": 1.0
+  },
+  "start": {
+    "cash": 30000, "opinion": 50, "startContacts": 4, "startReactor": "bench", "carryLimit": 8,
+    "materials": { "vial": 3, "medium": 20, "packaging": 24 }
+  },
+  "costs": {
+    "livingPerDay": 60, "energyPerReactorPerDay": 6, "marketingCost": 1500, "marketingOpinion": 4,
+    "taxiFare": 18, "taxiMinutes": 25
+  },
+  "materials": [
+    { "id": "vial", "label": "세포 바이알", "unit": "개", "price": 120, "orderStep": 1 },
+    { "id": "medium", "label": "배지", "unit": "L", "price": 25, "orderStep": 5 },
+    { "id": "packaging", "label": "포장재", "unit": "개", "price": 1.5, "orderStep": 10 }
+  ],
+  "reactors": [
+    { "id": "bench", "label": "연구실급 리액터", "price": 3500, "phase": 1, "lifeDays": 365, "capacityL": 5, "cultureHours": 72, "baseYieldKg": 1.6, "contamPerHour": 0.0018, "locked": 0 },
+    { "id": "pilot", "label": "파일럿 리액터", "price": 28000, "phase": 2, "lifeDays": 730, "capacityL": 40, "cultureHours": 96, "baseYieldKg": 16, "contamPerHour": 0.004, "locked": 0 },
+    { "id": "commercial", "label": "상업 규모 리액터", "price": 400000, "phase": 3, "lifeDays": 1825, "capacityL": 400, "cultureHours": 120, "baseYieldKg": 180, "contamPerHour": 0.006, "locked": 1 }
+  ],
+  "species": [
+    { "id": "chicken", "label": "닭", "cellLineRequired": 0, "yieldMult": 1.0, "priceMult": 1.0, "tasteBonus": 0 },
+    { "id": "pork", "label": "돼지", "cellLineRequired": 2, "yieldMult": 0.85, "priceMult": 1.35, "tasteBonus": 5 },
+    { "id": "beef", "label": "소", "cellLineRequired": 4, "yieldMult": 0.7, "priceMult": 1.9, "tasteBonus": 10 }
+  ],
+  "products": [
+    { "id": "ground", "label": "다짐육(패티·미트볼)", "kgPerPack": 0.2, "minutesPerPack": 6, "unlockAxis": "", "unlockLevel": 0, "unlockLabel": "시작 보유", "referencePrice": 18, "textureWeight": 0.2, "locked": 0 },
+    { "id": "nugget", "label": "너겟·소시지", "kgPerPack": 0.25, "minutesPerPack": 8, "unlockAxis": "cellLine", "unlockLevel": 2, "unlockLabel": "세포주 Lv2 (지방세포 분화)", "referencePrice": 26, "textureWeight": 0.3, "locked": 0 },
+    { "id": "slice", "label": "슬라이스·베이컨", "kgPerPack": 0.25, "minutesPerPack": 12, "unlockAxis": "scaffold", "unlockLevel": 2, "unlockLabel": "스캐폴드 연구 (v0.2)", "referencePrice": 45, "textureWeight": 0.5, "locked": 1 },
+    { "id": "steak", "label": "스테이크", "kgPerPack": 0.3, "minutesPerPack": 15, "unlockAxis": "vascular", "unlockLevel": 3, "unlockLabel": "스캐폴드 + 혈관화 연구 (v0.2)", "referencePrice": 80, "textureWeight": 0.6, "locked": 1 }
+  ],
+  "research": [
+    { "id": "cellLine", "label": "세포주", "problem": "세포가 얼마나 오래, 빨리 증식하는가",
+      "theory": "TERT 과발현으로 세포주를 불멸화하고 고밀도 현탁 배양에 적응시킨다.",
+      "effect": "배치당 수확량 +12%. Lv2 지방세포 분화(너겟·소시지)와 돼지, Lv4 소.",
+      "baseDifficulty": 2200, "difficultyGrowth": 1.55, "maxLevel": 6 },
+    { "id": "serumFree", "label": "무혈청 배지", "problem": "성장인자·배지 가격",
+      "theory": "소 태아 혈청(FBS)을 재조합 성장인자(FGF2, TGF-β)와 식물 가수분해물로 대체한다.",
+      "effect": "배지 단가 ×0.72. 원가에 가장 큰 효과.",
+      "baseDifficulty": 2600, "difficultyGrowth": 1.5, "maxLevel": 8 },
+    { "id": "scaffold", "label": "스캐폴드", "problem": "다짐육이 아닌 통짜 컷 형태",
+      "theory": "탈세포화 식물 조직이나 식용 하이드로젤 위에 근섬유를 한 방향으로 정렬시킨다.",
+      "effect": "질감 +6. 통짜 컷 제품은 v0.2에서 해금.",
+      "baseDifficulty": 3000, "difficultyGrowth": 1.6, "maxLevel": 5 },
+    { "id": "vascular", "label": "혈관화", "problem": "두꺼운 조직 중심부 괴사",
+      "theory": "관류형 스캐폴드의 미세 채널로 산소와 영양분을 조직 중심부까지 공급한다.",
+      "effect": "질감 +4. 제품 두께 한계 상승은 v0.2.",
+      "baseDifficulty": 3500, "difficultyGrowth": 1.65, "maxLevel": 5 },
+    { "id": "sterility", "label": "공정 무균화", "problem": "배치 오염",
+      "theory": "폐쇄형 일회용 백 리액터와 인라인 센서로 개방 조작 횟수를 줄인다.",
+      "effect": "오염 확률 -12%, 안전 +3.",
+      "baseDifficulty": 1800, "difficultyGrowth": 1.5, "maxLevel": 6 }
+  ],
+  "researchModel": {
+    "breakthroughShare": 0.22, "partialProgress": 0.5, "failKeep": 0.6, "staffPointsPerAptitude": 35,
+    "hiddenMultMin": 0.6, "hiddenMultMax": 1.7,
+    "yieldPerCellLine": 0.12, "mediumCostPerSerumFree": 0.72, "contamPerSterility": 0.12,
+    "textureScaffold": 6, "textureVascular": 4, "tasteCellLine": 4, "safetySterility": 3,
+    "newsBuffMult": 1.3, "newsBuffDays": 3
+  },
+  "compute": [
+    { "id": "laptop", "label": "기본 노트북", "price": 0, "perDay": 8, "researchMult": 0.8, "aiAccuracy": 0.55, "phase": 1 },
+    { "id": "workstation", "label": "GPU 워크스테이션", "price": 4500, "perDay": 18, "researchMult": 1.1, "aiAccuracy": 0.7, "phase": 1 },
+    { "id": "cluster", "label": "연산 클러스터 임대", "price": 25000, "perDay": 110, "researchMult": 1.5, "aiAccuracy": 0.85, "phase": 2 }
+  ],
+  "sales": {
+    "elasticity": 1.4, "maxPriceRatio": 2.2, "deadlineHours": 30, "contamIllnessChance": 0.5,
+    "referralChance": 0.35, "referralMinDeliveries": 2, "referralMinRelationship": 70,
+    "regularDeliveries": 3, "regularRelationship": 60,
+    "fridgeShelfHours": 120, "carryShelfHours": 10,
+    "exportPricePerPack": 30, "exportDailyCap": 20
+  },
+  "contacts": [
+    { "name": "엄마", "relation": "가족", "house": 0, "ordersPerDay": 0.7, "priceTolerance": 1.3, "startRelationship": 85, "likes": "ground" },
+    { "name": "민준", "relation": "대학 동기", "house": 1, "ordersPerDay": 0.6, "priceTolerance": 1.0, "startRelationship": 65, "likes": "ground" },
+    { "name": "서연", "relation": "전 직장 동료", "house": 2, "ordersPerDay": 0.5, "priceTolerance": 1.2, "startRelationship": 60, "likes": "nugget" },
+    { "name": "삼촌", "relation": "가족", "house": 3, "ordersPerDay": 0.5, "priceTolerance": 1.1, "startRelationship": 75, "likes": "ground" },
+    { "name": "지호", "relation": "민준의 친구", "house": 4, "ordersPerDay": 0.6, "priceTolerance": 0.9, "startRelationship": 50, "likes": "ground" },
+    { "name": "하은", "relation": "요리 블로거", "house": 5, "ordersPerDay": 0.5, "priceTolerance": 1.5, "startRelationship": 50, "likes": "nugget" },
+    { "name": "박 셰프", "relation": "동네 식당 사장", "house": 6, "ordersPerDay": 0.8, "priceTolerance": 1.0, "startRelationship": 50, "likes": "ground" },
+    { "name": "윤 교수", "relation": "식품공학 교수", "house": 7, "ordersPerDay": 0.4, "priceTolerance": 1.6, "startRelationship": 55, "likes": "ground" }
+  ],
+  "restaurant": {
+    "offers": [
+      { "name": "비스트로 오르", "kgPerWeek": 3, "minQuality": 50, "pricePerKg": 140, "penalty": 800, "weeks": 4 },
+      { "name": "그릴하우스 남문", "kgPerWeek": 6, "minQuality": 45, "pricePerKg": 110, "penalty": 1500, "weeks": 4 }
+    ]
+  },
+  "rounds": [
+    { "id": "savings", "label": "개인 저축", "amount": 0, "equity": 0, "toPhase": 1, "deadlineDays": 0, "condition": "게임 시작 시 보유" },
+    { "id": "angel", "label": "엔젤 투자", "amount": 150000, "equity": 12, "toPhase": 2, "deadlineDays": 60,
+      "condition": "차고 생산품 누적 판매와 단골 확보", "packsSold": 30, "regulars": 3 },
+    { "id": "seriesA", "label": "시리즈 A", "amount": 1200000, "equity": 20, "toPhase": 3, "deadlineDays": 0,
+      "condition": "지역 판매 계약, 안정적 배치 성공률, 첫 국가 승인", "restaurantWeeks": 2, "batchSuccess": 0.8, "approvals": 1 },
+    { "id": "seriesB", "label": "시리즈 B", "amount": 8000000, "equity": 18, "toPhase": 4, "deadlineDays": 0, "condition": "locked" }
+  ],
+  "approval": { "country": "도시국가 노바포르", "fee": 20000, "baseDays": 24, "contamDelayDays": 7, "lobbyDelayDays": 8, "phase": 2 },
+  "hiring": {
+    "phase": 2, "candidatesPerBatch": 3, "refreshDays": 5, "interviewMinutes": 60,
+    "answerNoise": 1.0, "narrowHalfWidth": 1.5,
+    "practicalCost": 400, "practicalMinutes": 120, "referenceCost": 150,
+    "baseSalary": 90, "salaryPerStat": 6,
+    "names": ["김도윤", "이서준", "박하린", "최지안", "정민서", "강예준", "조유나", "윤시우", "장다인", "임건우", "한소율", "오태윤"],
+    "traits": [
+      { "id": "perfectionist", "label": "완벽주의자", "desc": "꼼꼼함이 높고 작업 속도가 느리다.", "chance": 0.15 },
+      { "id": "ambitious", "label": "야심가", "desc": "빨리 성장하지만 연봉 인상을 요구한다.", "chance": 0.15 },
+      { "id": "aiDistrust", "label": "AI 불신", "desc": "AI가 지시한 연구에서 효율이 떨어진다.", "chance": 0.15 },
+      { "id": "insider", "label": "경쟁사 내통자", "desc": "정보를 경쟁사에 흘린다. Phase 3 이후 등장.", "chance": 0.08 }
+    ],
+    "questions": [
+      { "id": "tech1", "kind": "tech", "text": "현탁 배양에서 세포 밀도가 갑자기 떨어지면 무엇부터 확인합니까?", "targets": ["skill"], "minutes": 12,
+        "low": "음… 일단 배지를 새로 갈아 보겠습니다.",
+        "mid": "용존 산소와 pH를 확인하고, 필요하면 계대 시점을 앞당깁니다.",
+        "high": "전단 응력, 용존 산소, 젖산 축적을 차례로 보고 교반 속도와 관류율을 조정합니다." },
+      { "id": "tech2", "kind": "tech", "text": "무혈청 배지 전환 실험을 설계한다면 어떻게 하겠습니까?", "targets": ["research"], "minutes": 15,
+        "low": "혈청을 그냥 빼고 잘 자라는지 보면 되지 않을까요?",
+        "mid": "혈청 농도를 단계적으로 낮추면서 성장인자를 보충하는 비교 실험을 하겠습니다.",
+        "high": "FGF2·TGF-β 조합을 요인 설계로 스크리닝하고, 세포를 단계적으로 순응시키며 증식률과 분화능을 함께 보겠습니다." },
+      { "id": "tech3", "kind": "tech", "text": "하루에 리액터 6기를 혼자 관리하는 일정을 짜 보세요.", "targets": ["speed"], "minutes": 10,
+        "low": "한 기씩 꼼꼼히 하다 보면 하루가 다 갈 것 같습니다.",
+        "mid": "배지 교체를 오전에 몰고, 점검은 오후에 돌겠습니다.",
+        "high": "교체 주기가 겹치지 않게 접종 시각을 엇갈리고, 점검과 교체를 한 동선으로 묶겠습니다." },
+      { "id": "situ1", "kind": "situ", "text": "새벽에 오염 의심 경보가 울리면 어떻게 합니까?", "targets": ["care", "reliability"], "minutes": 12,
+        "low": "아침에 출근해서 확인하겠습니다.",
+        "mid": "원격으로 수치를 보고, 이상하면 바로 나가겠습니다.",
+        "high": "바로 나가 샘플을 떠서 확인하고, 인접 리액터를 격리한 뒤 보고하겠습니다." },
+      { "id": "situ2", "kind": "situ", "text": "실험 결과가 기대와 다르게 나오면 보고서에 어떻게 씁니까?", "targets": ["reliability"], "minutes": 10,
+        "low": "좋게 나온 반복만 추려서 쓰겠습니다.",
+        "mid": "결과는 그대로 쓰고, 이유는 추정으로 덧붙이겠습니다.",
+        "high": "원자료를 모두 남기고, 실패 조건과 다음 실험안을 함께 보고하겠습니다." },
+      { "id": "situ3", "kind": "situ", "text": "멸균 절차가 너무 번거롭다는 동료가 있다면?", "targets": ["care"], "minutes": 10,
+        "low": "바쁘면 몇 단계는 건너뛰어도 괜찮다고 봅니다.",
+        "mid": "절차를 지키자고 말하겠습니다.",
+        "high": "왜 각 단계가 필요한지 오염 사례로 설명하고, 줄일 수 있는 단계는 근거를 모아 제안하겠습니다." },
+      { "id": "career1", "kind": "career", "text": "이전 직장에서 맡은 배양 규모와 성과를 구체적으로 말해 주세요.", "targets": [], "minutes": 12,
+        "low": "", "mid": "", "high": "" }
+    ]
+  },
+  "events": {
+    "concealDiscoverChance": 0.45, "discloseOpinion": 4, "concealOpinion": 20,
+    "lobbyCost": 8000, "lobbyChancePerDay": 0.08, "ignoreLobbyOpinion": 2,
+    "newsPerDay": 1.5, "raiseRequestDay": 20
+  },
+  "news": [
+    { "kind": "rival", "text": "{rival}, {country}에서 배양 닭고기 판매 승인", "effect": "approval", "value": 2 },
+    { "kind": "research", "text": "저비용 무혈청 배지 논문 발표", "effect": "research", "axis": "serumFree" },
+    { "kind": "research", "text": "불멸화 세포주 오픈소스 공개, 업계 주목", "effect": "research", "axis": "cellLine" },
+    { "kind": "research", "text": "일회용 폐쇄형 리액터 가격 {n}0% 하락", "effect": "research", "axis": "sterility" },
+    { "kind": "regulation", "text": "보수형 시장국, 배양육 판매 금지 법안 발의", "effect": "opinion", "value": -1 },
+    { "kind": "safety", "text": "{rival} 배양육 제품 리콜", "effect": "opinion", "value": -3 },
+    { "kind": "culture", "text": "유명 셰프, 배양육 코스 메뉴 출시", "effect": "opinion", "value": 3 },
+    { "kind": "macro", "text": "사료값 급등으로 소고기 가격 {n}% 상승", "effect": "reference", "value": 1.05 },
+    { "kind": "culture", "text": "설문: 20대 {n}0%가 배양육 시식 의향", "effect": "opinion", "value": 2 },
+    { "kind": "rival", "text": "{rival}, 시리즈 B 유치. 경쟁 가열", "effect": "none" }
+  ],
+  "locations": [
+    { "id": "garage", "label": "차고", "phase": 1, "reactorSlots": 3, "rentPerDay": 0 },
+    { "id": "lab", "label": "공유 실험실", "phase": 2, "reactorSlots": 4, "rentPerDay": 220 }
+  ]
+}

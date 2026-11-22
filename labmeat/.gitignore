@@ -1,0 +1,21 @@
+# Unity
+/Library/
+/Temp/
+/Obj/
+/Build/
+/Builds/
+/Logs/
+/UserSettings/
+/MemoryCaptures/
+*.csproj
+*.sln
+*.user
+*.pidb
+*.booproj
+*.unityproj
+.vs/
+.idea/
+# 테스트 프로젝트 빌드 산출물 (프로젝트 파일 자체는 유지)
+!/Tests~/**/*.csproj
+/Tests~/**/bin/
+/Tests~/**/obj/
