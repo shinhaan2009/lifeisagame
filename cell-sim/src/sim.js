@@ -1,7 +1,10 @@
-// 세포 관리 시뮬레이션 v0.1 — 시뮬레이션 코어.
-// DOM 의존 없음. 고정 틱(cfg.tickHz)으로 step()을 호출한다. 자원은 정수 카운터.
+// 세포 관리 시뮬레이션 v0.2 — 팩토리형 시뮬레이션 코어.
+// 타일 그리드 위에 소기관(기계)과 미세소관(운반 라인)을 배치한다.
+// 아이템(포도당·아미노산·피루브산·단백질·폐기물)은 미세소관 위를 실제로 이동한다.
+// ATP·O₂·세포막 내구도·세포질 폐기물은 전역 값이다. DOM 의존 없음, 고정 틱.
 
-export const RES = ['glucose', 'o2', 'amino', 'atp', 'pyruvate', 'protein', 'waste'];
+export const ITEMS = ['glucose', 'amino', 'pyruvate', 'protein', 'waste'];
+export const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]]; // 0 동 1 남 2 서 3 북
 export const THREATS = ['hypoxia', 'starvation', 'virus'];
 
 function rng(seed) {
@@ -15,126 +18,182 @@ function rng(seed) {
   };
 }
 
-export function createSim(cfg, { seed = 1 } = {}) {
+const key = (x, y) => `${x},${y}`;
+
+// ---------- 생성 ----------
+
+export function createSim(cfg, { seed = 1, starter = true } = {}) {
   const s = {
     cfg,
     rand: rng(seed),
     t: 0,
     tick: 0,
     stage: 'prokaryote',
+    size: 1,
     status: 'running',
     reason: '',
     res: { ...cfg.start },
-    acc: { o2: 0, upkeep: 0, excrete: 0, wear: 0, leak: {} },
+    acc: { o2: 0, upkeep: 0, excrete: 0, synth: 0 },
     membrane: cfg.homeostasis.membraneMax,
-    size: cfg.prokaryote.startSize,
-    org: [],
+    ents: new Map(),
+    grid: new Map(),
     nextId: 1,
     env: { o2: cfg.environment.o2Normal, glucose: cfg.environment.glucoseSupply },
     crit: { atp: 0, waste: 0, membrane: 0 },
     threat: { pending: null, active: [] },
     virus: { outside: 0, inside: 0, decay: 0 },
     symbiosis: null,
-    flows: [],
     log: [],
-    stats: { atpMade: 0, proteinMade: 0 },
+    stats: { atpMade: 0, proteinDelivered: 0 },
   };
   s.threat.pending = scheduleThreat(s, cfg.threats.firstAtSec);
-  for (const [type, n] of Object.entries(cfg.prokaryote.startOrganelles)) {
-    for (let i = 0; i < n; i++) addOrganelle(s, type);
-  }
+  addEntity(s, 'hub', -1, -1, 0);
+  if (starter) buildStarter(s);
   log(s, '원핵세포 단계 시작');
   return s;
 }
 
+// 시작 생산 라인: 포도당 → 해당 → 막 호흡 / 아미노산 → 리보솜 → 핵양체
+function buildStarter(s) {
+  addEntity(s, 'transporter', 5, 0, 2, 'glucose');
+  addEntity(s, 'belt', 4, 0, 2);
+  addEntity(s, 'glyco', 3, 0, 0);
+  addEntity(s, 'belt', 3, 1, 1);
+  addEntity(s, 'belt', 3, 2, 1);
+  addEntity(s, 'belt', 3, 3, 1);
+  addEntity(s, 'respChain', 3, 4, 0);
+  addEntity(s, 'transporter', -5, 0, 0, 'amino');
+  addEntity(s, 'belt', -4, 0, 0);
+  addEntity(s, 'ribosome', -3, 0, 0);
+  addEntity(s, 'belt', -2, 0, 0);
+}
+
 function log(s, msg) {
   s.log.push({ t: s.t, msg });
-  if (s.log.length > 50) s.log.shift();
+  if (s.log.length > 60) s.log.shift();
 }
 
-function scheduleThreat(s, delay) {
-  const pool = s.stage === 'prokaryote' ? ['hypoxia', 'starvation'] : THREATS;
-  const type = pool[Math.floor(s.rand() * pool.length)];
-  return { type, at: s.t + delay, warned: false };
+export const def = (s, type) => s.cfg.buildings[type];
+export const dims = (s, type) => [def(s, type).w || 1, def(s, type).h || 1];
+
+export function radius(s) {
+  return s.stage === 'prokaryote' ? s.cfg.prokaryote.radii[s.size - 1] : s.cfg.grid.eukaryoteRadius;
 }
 
-function addOrganelle(s, type, pos) {
-  const o = {
-    id: s.nextId++,
-    type,
-    hp: s.cfg.homeostasis.organelleHp,
-    progress: 0,
-    mode: type === 'transporter' ? (s.org.filter((x) => x.type === 'transporter').length % 2 ? 'amino' : 'glucose') : null,
-    hijacked: false,
-    x: pos?.x ?? null,
-    y: pos?.y ?? null,
+export function gridExtent(s) {
+  return s.cfg.grid.eukaryoteRadius + s.cfg.grid.margin;
+}
+
+export function tileKind(s, x, y) {
+  const d = Math.hypot(x, y), r = radius(s);
+  if (d < r - 0.5) return 'interior';
+  if (d < r + 0.5) return 'membrane';
+  return 'env';
+}
+
+export function entityAt(s, x, y) {
+  const id = s.grid.get(key(x, y));
+  return id ? s.ents.get(id) : null;
+}
+
+function footprint(e) {
+  const out = [];
+  for (let i = 0; i < e.w; i++) for (let j = 0; j < e.h; j++) out.push([e.x + i, e.y + j]);
+  return out;
+}
+
+const inside = (e, x, y) => x >= e.x && x < e.x + e.w && y >= e.y && y < e.y + e.h;
+
+function addEntity(s, type, x, y, dir = 0, mode = null) {
+  const [w, h] = dims(s, type);
+  const d = def(s, type);
+  const e = {
+    id: s.nextId++, type, x, y, w, h, dir,
+    mode: d.modes ? (mode || d.modes[0]) : null,
+    inBuf: {}, outBuf: [], items: type === 'belt' ? [] : null,
+    progress: 0, hp: s.cfg.homeostasis.hp, hijacked: false, status: '대기', rr: 0,
   };
-  s.org.push(o);
-  return o;
+  s.ents.set(e.id, e);
+  for (const [tx, ty] of footprint(e)) s.grid.set(key(tx, ty), e.id);
+  return e;
 }
 
-export const count = (s, type) => s.org.filter((o) => o.type === type).length;
-
-export function membraneSlots(s) {
-  if (s.stage !== 'prokaryote') return Infinity;
-  return s.cfg.prokaryote.slotsPerArea * s.size * s.size;
+function removeEntity(s, e) {
+  for (const [tx, ty] of footprint(e)) s.grid.delete(key(tx, ty));
+  s.ents.delete(e.id);
 }
 
-export function usedSlots(s) {
-  return s.org.filter((o) => s.cfg.organelles[o.type].membraneSlot).length;
-}
+const refund = (s, type) => { s.res.protein = Math.min(s.cfg.caps.protein, s.res.protein + def(s, type).cost); };
+
+export const count = (s, type) => [...s.ents.values()].filter((e) => e.type === type).length;
 
 export function totalUpkeep(s) {
   let u = 0;
-  for (const o of s.org) u += s.cfg.organelles[o.type].upkeep;
+  for (const e of s.ents.values()) {
+    const d = def(s, e.type);
+    u += e.type === 'hub' && s.stage === 'prokaryote' ? d.upkeepProkaryote : d.upkeep;
+  }
   if (s.stage === 'prokaryote') u += s.cfg.prokaryote.upkeepPerVolume * s.size ** 3;
   return u;
 }
 
-// ---------- 플레이어 액션 ----------
+export const wasteRatio = (s) => s.res.waste / s.cfg.caps.waste;
 
-export function canBuild(s, type) {
-  const def = s.cfg.organelles[type];
-  if (!def || def.fixed) return { ok: false, why: '건설 불가' };
-  if (!def.stages.includes(s.stage)) return { ok: false, why: '현재 단계에서 불가' };
-  if (s.res.protein < def.cost) return { ok: false, why: `단백질 ${def.cost} 필요` };
-  if (def.membraneSlot && usedSlots(s) >= membraneSlots(s)) return { ok: false, why: '막 면적 부족' };
+// ---------- 배치 ----------
+
+export function canPlace(s, type, x, y) {
+  const d = def(s, type);
+  if (!d || d.fixed) return { ok: false, why: '건설 불가' };
+  if (!d.stages.includes(s.stage)) return { ok: false, why: '현재 단계에서 불가' };
+  if (s.res.protein < d.cost) return { ok: false, why: `단백질 ${d.cost} 필요` };
+  const [w, h] = dims(s, type);
+  for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) {
+    if (tileKind(s, x + i, y + j) !== d.place) return { ok: false, why: d.place === 'membrane' ? '막 위에만 설치' : '세포 내부에만 설치' };
+    if (s.grid.has(key(x + i, y + j))) return { ok: false, why: '이미 점유됨' };
+  }
   return { ok: true };
 }
 
-export function build(s, type, pos) {
+export function place(s, type, x, y, dir = 0) {
   if (s.status !== 'running') return null;
-  const c = canBuild(s, type);
-  if (!c.ok) return null;
-  s.res.protein -= s.cfg.organelles[type].cost;
-  const o = addOrganelle(s, type, pos);
-  log(s, `${s.cfg.organelles[type].label} 건설`);
-  return o;
+  const ex = entityAt(s, x, y);
+  if (type === 'belt' && ex && ex.type === 'belt') { ex.dir = dir; return ex; } // 같은 자리: 방향만 변경
+  if (!canPlace(s, type, x, y).ok) return null;
+  const d = def(s, type);
+  s.res.protein -= d.cost;
+  if (d.place === 'membrane') dir = inwardDir(x, y);
+  return addEntity(s, type, x, y, dir);
 }
 
-export function demolish(s, id) {
-  const i = s.org.findIndex((o) => o.id === id);
-  if (i < 0) return false;
-  const o = s.org[i];
-  const def = s.cfg.organelles[o.type];
-  if (def.fixed) return false;
-  s.org.splice(i, 1);
-  s.res.protein = Math.min(s.cfg.caps.protein, s.res.protein + Math.floor(def.cost / 2));
-  if (o.hijacked) s.virus.inside = Math.max(0, s.virus.inside - 1);
-  log(s, `${def.label} 해체`);
+function inwardDir(x, y) {
+  return Math.abs(x) >= Math.abs(y) ? (x > 0 ? 2 : 0) : (y > 0 ? 3 : 1);
+}
+
+export function remove(s, x, y) {
+  const e = entityAt(s, x, y);
+  if (!e || def(s, e.type).fixed) return false;
+  removeEntity(s, e);
+  refund(s, e.type);
   return true;
 }
 
-export function setMode(s, id, mode) {
-  const o = s.org.find((x) => x.id === id);
-  if (o && o.type === 'transporter' && (mode === 'glucose' || mode === 'amino')) o.mode = mode;
+export function rotate(s, x, y) {
+  const e = entityAt(s, x, y);
+  if (e && e.type === 'belt') e.dir = (e.dir + 1) % 4;
 }
+
+export function setMode(s, id, mode) {
+  const e = s.ents.get(id);
+  if (e && def(s, e.type).modes?.includes(mode)) e.mode = mode;
+}
+
+// ---------- 단계 진행 ----------
 
 export function canGrow(s) {
   const p = s.cfg.prokaryote;
   if (s.stage !== 'prokaryote') return { ok: false, why: '원핵 단계 전용' };
-  if (s.size >= p.maxSize) return { ok: false, why: '막 면적 한계' };
-  const cost = p.growCostPerSize * s.size;
+  if (s.size >= p.radii.length) return { ok: false, why: '막 면적 한계' };
+  const cost = p.growCost[s.size - 1];
   if (s.res.protein < cost) return { ok: false, why: `단백질 ${cost} 필요` };
   return { ok: true, cost };
 }
@@ -143,47 +202,91 @@ export function grow(s) {
   const c = canGrow(s);
   if (!c.ok || s.status !== 'running') return false;
   s.res.protein -= c.cost;
-  s.size += 1;
-  log(s, `세포 성장 → 크기 ${s.size}`);
+  s.size++;
+  relocateMembrane(s);
+  log(s, `세포 성장 → 반지름 ${radius(s)}. 막 소기관이 새 막으로 이동, 미세소관 재연결 필요`);
   return true;
+}
+
+// 막 위 건물을 같은 방위각의 새 막 타일로 옮긴다. 자리가 없거나 단계에 맞지 않으면 환불.
+function relocateMembrane(s) {
+  const R = gridExtent(s);
+  const ring = [];
+  for (let x = -R; x <= R; x++) for (let y = -R; y <= R; y++) if (tileKind(s, x, y) === 'membrane') ring.push([x, y]);
+  const movers = [...s.ents.values()].filter((e) => def(s, e.type).place === 'membrane');
+  for (const e of movers) removeEntity(s, e);
+  for (const e of movers) {
+    if (!def(s, e.type).stages.includes(s.stage)) { refund(s, e.type); continue; }
+    const a = Math.atan2(e.y, e.x);
+    let best = null, bd = Infinity;
+    for (const [x, y] of ring) {
+      if (s.grid.has(key(x, y))) continue;
+      const b = Math.atan2(y, x);
+      const da = Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)));
+      if (da < bd) { bd = da; best = [x, y]; }
+    }
+    if (!best) { refund(s, e.type); continue; }
+    e.x = best[0]; e.y = best[1]; e.dir = inwardDir(e.x, e.y);
+    s.ents.set(e.id, e);
+    s.grid.set(key(e.x, e.y), e.id);
+  }
+  // 막 타일과 겹치게 된 내부 건물은 환불 철거
+  for (const e of [...s.ents.values()]) {
+    if (def(s, e.type).place !== 'interior') continue;
+    if (footprint(e).some(([x, y]) => tileKind(s, x, y) !== 'interior')) { removeEntity(s, e); refund(s, e.type); }
+  }
 }
 
 export function canSymbiosis(s) {
   const p = s.cfg.prokaryote;
   if (s.stage !== 'prokaryote') return { ok: false, why: '원핵 단계 전용' };
   if (s.symbiosis) return { ok: false, why: '진행 중' };
-  if (s.size < p.maxSize) return { ok: false, why: '막 면적 한계 미도달' };
+  if (s.size < p.radii.length) return { ok: false, why: '막 면적 한계 미도달' };
   if (s.res.protein < p.symbiosis.proteinCost) return { ok: false, why: `단백질 ${p.symbiosis.proteinCost} 필요` };
   if (s.res.atp < p.symbiosis.atpCost) return { ok: false, why: `ATP ${p.symbiosis.atpCost} 필요` };
   return { ok: true };
 }
 
 export function startSymbiosis(s) {
-  const c = canSymbiosis(s);
-  if (!c.ok || s.status !== 'running') return false;
+  if (!canSymbiosis(s).ok || s.status !== 'running') return false;
   const sy = s.cfg.prokaryote.symbiosis;
   s.res.protein -= sy.proteinCost;
   s.res.atp -= sy.atpCost;
   s.symbiosis = { elapsed: 0, duration: sy.integrationSec };
-  log(s, '호기성 세균 포획 — 공생 통합 시작');
+  log(s, '호기성 세균 포획: 공생 통합 시작');
   return true;
 }
 
 function completeSymbiosis(s) {
-  const e = s.cfg.eukaryote;
   s.stage = 'eukaryote';
   s.symbiosis = null;
-  s.org = s.org.filter((o) => !e.removeOnSymbiosis.includes(o.type));
-  for (const [type, n] of Object.entries(e.grantOnSymbiosis)) {
-    for (let i = 0; i < n; i++) addOrganelle(s, type);
+  relocateMembrane(s);
+  const spot = findFree(s, 'mitochondrion');
+  if (spot) addEntity(s, 'mitochondrion', spot[0], spot[1], 0);
+  log(s, '공생 성공: 진핵세포 단계. 미토콘드리아 1기 획득, 막 호흡 복합체 환불');
+}
+
+function findFree(s, type) {
+  const [w, h] = dims(s, type);
+  const R = gridExtent(s);
+  const cands = [];
+  for (let x = -R; x <= R; x++) for (let y = -R; y <= R; y++) cands.push([x, y]);
+  cands.sort((a, b) => Math.hypot(a[0], a[1]) - Math.hypot(b[0], b[1]));
+  for (const [x, y] of cands) {
+    if (x + w >= -2 && x <= 2 && y + h >= -2 && y <= 2) continue; // 핵 둘레 한 칸 비움
+    let ok = true;
+    for (let i = 0; i < w && ok; i++) for (let j = 0; j < h && ok; j++) {
+      if (tileKind(s, x + i, y + j) !== 'interior' || s.grid.has(key(x + i, y + j))) ok = false;
+    }
+    if (ok) return [x, y];
   }
-  log(s, '공생 성공 — 진핵세포 단계 진입');
+  return null;
 }
 
 export function canDivide(s) {
   const need = s.cfg.win.proteinForDivision;
   if (s.stage !== 'eukaryote') return { ok: false, why: '진핵 단계 필요' };
-  if (s.res.protein < need) return { ok: false, why: `단백질 ${need} 필요` };
+  if (s.res.protein < need) return { ok: false, why: `핵에 단백질 ${need} 필요` };
   return { ok: true };
 }
 
@@ -192,308 +295,297 @@ export function divide(s) {
   s.res.protein -= s.cfg.win.proteinForDivision;
   s.status = 'won';
   s.reason = '세포분열 완료';
-  log(s, '세포분열 완료 — 승리');
+  log(s, '세포분열 완료: 승리');
+  return true;
+}
+
+// ---------- 물류 ----------
+
+function beltHasRoom(s, b) {
+  return b.items.length === 0 || b.items[b.items.length - 1].pos >= s.cfg.belt.spacing;
+}
+
+export function accepts(s, e, item) {
+  const d = def(s, e.type);
+  if (e.type === 'hub') return d.accepts.includes(item) && s.res.protein < s.cfg.caps.protein;
+  if (!d.in || !(item in d.in)) return false;
+  return (e.inBuf[item] || 0) < Math.max(4, d.in[item] * s.cfg.machineBuffer);
+}
+
+function deliver(s, e, item) {
+  if (e.type === 'hub') { s.res.protein++; s.stats.proteinDelivered++; return; }
+  e.inBuf[item] = (e.inBuf[item] || 0) + 1;
+}
+
+// 기계 출력 → 인접한 미세소관 중 기계 쪽을 향하지 않는 것으로 순환 배출
+function pushOutputs(s, e) {
+  if (!e.outBuf.length) return;
+  const cands = [];
+  for (let i = -1; i <= e.w; i++) for (let j = -1; j <= e.h; j++) {
+    const edgeX = i === -1 || i === e.w, edgeY = j === -1 || j === e.h;
+    if (edgeX === edgeY) continue; // 모서리·내부 제외
+    const b = entityAt(s, e.x + i, e.y + j);
+    if (!b || b.type !== 'belt') continue;
+    const [dx, dy] = DIRS[b.dir];
+    if (inside(e, b.x + dx, b.y + dy)) continue;
+    cands.push(b);
+  }
+  for (let k = 0; k < cands.length && e.outBuf.length; k++) {
+    const b = cands[(e.rr + k) % cands.length];
+    if (beltHasRoom(s, b)) {
+      b.items.push({ type: e.outBuf.shift(), pos: 0 });
+      e.rr = (e.rr + k + 1) % cands.length;
+    }
+  }
+}
+
+function moveBelts(s, dt) {
+  const { speed, spacing } = s.cfg.belt;
+  for (const b of s.ents.values()) {
+    if (b.type !== 'belt') continue;
+    if (!b.items.length) { b.blocked = false; continue; }
+    for (let i = 0; i < b.items.length; i++) {
+      const lim = i === 0 ? 1 : b.items[i - 1].pos - spacing;
+      b.items[i].pos = Math.max(b.items[i].pos, Math.min(b.items[i].pos + speed * dt, lim));
+    }
+    const head = b.items[0];
+    if (head.pos < 1) { b.blocked = false; continue; }
+    const [dx, dy] = DIRS[b.dir];
+    const n = entityAt(s, b.x + dx, b.y + dy);
+    let moved = false;
+    if (n && n.type === 'belt') {
+      if (n.dir !== (b.dir + 2) % 4 && beltHasRoom(s, n)) { n.items.push({ type: head.type, pos: 0 }); moved = true; }
+    } else if (n && accepts(s, n, head.type)) {
+      deliver(s, n, head.type);
+      moved = true;
+    }
+    if (moved) b.items.shift();
+    b.blocked = !moved;
+  }
+}
+
+// ---------- 기계 ----------
+
+function hasInputs(e, inp) {
+  for (const [r, n] of Object.entries(inp || {})) if ((e.inBuf[r] || 0) < n) return false;
+  return true;
+}
+
+function consume(e, inp) {
+  for (const [r, n] of Object.entries(inp || {})) e.inBuf[r] -= n;
+}
+
+const addWaste = (s, n) => { s.res.waste = Math.min(s.cfg.caps.waste, s.res.waste + n); };
+
+function craft(s, e) {
+  const d = def(s, e.type);
+  const cap = s.cfg.caps;
+
+  if (e.type === 'transporter') {
+    if (s.res.atp < d.atpIn) { e.status = 'ATP 부족'; return false; }
+    if (e.outBuf.length >= s.cfg.outputBuffer) { e.status = '출구 막힘'; return false; }
+    s.res.atp -= d.atpIn;
+    e.outBuf.push(e.mode);
+    e.status = '작동';
+    return true;
+  }
+  if (e.type === 'exporter') {
+    if (!(e.inBuf.waste > 0)) { e.status = '입력 대기'; return false; }
+    e.inBuf.waste--;
+    e.status = '작동';
+    return true;
+  }
+  if (e.type === 'lysosome' && s.virus.inside > 0) {
+    s.virus.inside--;
+    log(s, '리소좀: 침투 바이러스 분해');
+    e.status = '바이러스 분해';
+    return true;
+  }
+  if (e.type === 'golgi' && s.membrane >= d.activeBelowMembrane) { e.status = '막 정상, 대기'; return false; }
+
+  if (!hasInputs(e, d.in)) { e.status = '입력 대기'; return false; }
+  if (d.atpIn && s.res.atp < d.atpIn) { e.status = 'ATP 부족'; return false; }
+  if (d.o2In && s.res.o2 < d.o2In) { e.status = 'O₂ 부족'; return false; }
+  if (d.atpOut && s.res.atp + d.atpOut > cap.atp) { e.status = 'ATP 포화, 억제'; return false; }
+
+  if (e.hijacked) {
+    consume(e, d.in);
+    if (d.atpIn) s.res.atp -= d.atpIn;
+    e.viral = (e.viral || 0) + 1;
+    if (e.viral % 3 === 0 && s.virus.inside < 8) { s.virus.inside++; log(s, '바이러스 복제'); }
+    e.status = '바이러스 탈취';
+    return true;
+  }
+
+  const outN = Object.values(d.out || {}).reduce((a, b) => a + b, 0);
+  const fits = e.outBuf.length + outN <= s.cfg.outputBuffer;
+  if (!fits) {
+    if (d.fermentWhenBlocked) {
+      consume(e, d.in);
+      s.res.atp += d.atpOut || 0;
+      s.stats.atpMade += d.atpOut || 0;
+      addWaste(s, d.fermentWhenBlocked.waste);
+      e.fermented = (e.fermented || 0) + 1;
+      e.status = '발효 중 (출구 막힘)';
+      return true;
+    }
+    if (!Object.keys(d.out || {}).every((k) => k === 'waste')) { e.status = '출구 막힘'; return false; }
+  }
+
+  consume(e, d.in);
+  if (d.atpIn) s.res.atp -= d.atpIn;
+  if (d.o2In) s.res.o2 -= d.o2In;
+  if (d.atpOut) { s.res.atp += d.atpOut; s.stats.atpMade += d.atpOut; }
+  if (d.wasteToPool) addWaste(s, d.wasteToPool);
+  if (d.membraneOut) s.membrane = Math.min(s.cfg.homeostasis.membraneMax, s.membrane + d.membraneOut);
+  for (const [r, n] of Object.entries(d.out || {})) {
+    for (let i = 0; i < n; i++) {
+      if (e.outBuf.length < s.cfg.outputBuffer) e.outBuf.push(r);
+      else addWaste(s, 1); // 출구 막힌 폐기물은 세포질로 유출
+    }
+  }
+  e.status = fits ? '작동' : '작동, 폐기물 세포질 유출';
   return true;
 }
 
 // ---------- 틱 ----------
 
-function cap(s, r) {
-  return s.cfg.caps[r];
-}
-
-function hasInputs(s, inp) {
-  for (const [r, n] of Object.entries(inp)) if (s.res[r] < n) return false;
-  return true;
-}
-
-function hasRoom(s, out) {
-  for (const [r, n] of Object.entries(out)) {
-    if (r.startsWith('$')) continue;
-    if (r === 'waste') continue; // 폐기물은 상한 초과 허용 대신 상한에서 잘림 — 생산 자체는 막지 않는다
-    if (s.res[r] + n > cap(s, r)) return false;
-  }
-  return true;
-}
-
-function apply(s, inp, out) {
-  for (const [r, n] of Object.entries(inp)) s.res[r] -= n;
-  for (const [r, n] of Object.entries(out)) {
-    if (r.startsWith('$')) continue;
-    s.res[r] = Math.min(cap(s, r), s.res[r] + n);
-  }
-}
-
-function flow(s, src, dst, res) {
-  if (s.flows.length < 200) s.flows.push({ src, dst, res });
-}
-
-// 반응기 하나를 진행. 반응 1회 성공할 때마다 onFire 호출.
-function runReactor(s, holder, rate, dt, tryFire) {
-  holder.progress += rate * dt;
-  let fired = 0;
-  while (holder.progress >= 1) {
-    if (!tryFire()) {
-      holder.progress = 1; // 막힘: 진행도 유지, 입력 대기
-      break;
-    }
-    holder.progress -= 1;
-    fired++;
-  }
-  return fired;
-}
-
-export function wasteRatio(s) {
-  return s.res.waste / cap(s, 'waste');
-}
-
 export function step(s) {
   if (s.status !== 'running') return;
-  const cfg = s.cfg;
-  const H = cfg.homeostasis;
+  const cfg = s.cfg, H = cfg.homeostasis;
   const dt = 1 / cfg.tickHz;
   s.t += dt;
   s.tick++;
-  s.flows = [];
 
   updateThreats(s, dt);
 
   const wasteCrit = wasteRatio(s) > H.wasteCriticalRatio;
-  const eff = wasteCrit ? H.wasteEfficiency : 1;
+  const eff = (wasteCrit ? H.wasteEfficiency : 1) * (s.res.atp <= 0 ? 0.25 : 1);
 
-  // 1. 산소 확산 (환경 농도 비례)
+  // O₂ 확산
   s.acc.o2 += cfg.environment.o2DiffusionPerSec * s.env.o2 * dt;
-  while (s.acc.o2 >= 1) {
-    s.acc.o2 -= 1;
-    if (s.res.o2 < cap(s, 'o2')) { s.res.o2++; flow(s, 'env', 'cyto', 'o2'); }
-  }
+  while (s.acc.o2 >= 1) { s.acc.o2--; if (s.res.o2 < cfg.caps.o2) s.res.o2++; }
 
-  // 1b. 포도당 수동 확산 (소량, ATP 고갈 시 회복 여지)
-  s.acc.glc = (s.acc.glc || 0) + cfg.environment.glucosePassivePerSec * s.env.glucose * dt;
-  while (s.acc.glc >= 1) {
-    s.acc.glc -= 1;
-    if (s.res.glucose < cap(s, 'glucose')) s.res.glucose++;
-  }
-
-  // 2. 수송체
-  for (const o of s.org) {
-    if (o.type !== 'transporter') continue;
-    const def = cfg.organelles.transporter;
-    const r = o.mode === 'glucose' ? def.rate * s.env.glucose : def.rate;
-    runReactor(s, o, r * eff, dt, () => {
-      if (s.res.atp < 1 || s.res[o.mode] >= cap(s, o.mode)) return false;
-      s.res.atp -= 1;
-      s.res[o.mode] += 1;
-      flow(s, 'env', o.id, o.mode);
-      return true;
-    });
-  }
-
-  // 3. 해당과정 (세포 기본 기능)
-  const gly = cfg.glycolysis;
-  s.glyHolder ??= { progress: 0 };
-  runReactor(s, s.glyHolder, gly.rate * eff, dt, () => {
-    if (!hasInputs(s, gly.in) || !hasRoom(s, gly.out)) return false;
-    apply(s, gly.in, gly.out);
-    s.stats.atpMade += gly.out.atp;
-    flow(s, 'cyto', 'cyto', 'pyruvate');
-    return true;
-  });
-
-  // 4. 호기성 호흡 (막 호흡 복합체 / 미토콘드리아)
-  for (const o of s.org) {
-    if (o.type !== 'respChain' && o.type !== 'mitochondrion') continue;
-    const def = cfg.organelles[o.type];
-    runReactor(s, o, def.rate * eff, dt, () => {
-      // ATP 포화 시 호흡 억제 (피드백 저해)
-      if (!hasInputs(s, def.in) || !hasRoom(s, def.out)) return false;
-      apply(s, def.in, def.out);
-      s.stats.atpMade += def.out.atp;
-      flow(s, o.id, 'cyto', 'atp');
-      return true;
-    });
-  }
-
-  // 5. 발효 (자동): O₂ 부족 또는 피루브산 적체(호흡 포화)
-  const fer = cfg.fermentation;
-  s.ferHolder ??= { progress: 0 };
-  s.fermenting = s.res.pyruvate >= 2 && (s.res.o2 < 1 || s.res.pyruvate >= cap(s, 'pyruvate') / 2);
-  if (s.fermenting) {
-    runReactor(s, s.ferHolder, fer.rate, dt, () => {
-      if (s.res.pyruvate < 2 || !(s.res.o2 < 1 || s.res.pyruvate >= cap(s, 'pyruvate') / 2)) return false;
-      apply(s, fer.in, fer.out);
-      return true;
-    });
-  } else {
-    s.ferHolder.progress = 0;
-  }
-
-  // 6. 리보솜 (탈취된 리보솜은 바이러스를 복제)
-  const hijackTarget = Math.min(s.virus.inside, count(s, 'ribosome'));
+  // 바이러스 탈취 대상 리보솜
   let h = 0;
-  for (const o of s.org) if (o.type === 'ribosome') o.hijacked = h++ < hijackTarget;
-  for (const o of s.org) {
-    if (o.type !== 'ribosome') continue;
-    const def = cfg.organelles.ribosome;
-    runReactor(s, o, def.rate * eff, dt, () => {
-      if (!hasInputs(s, def.in)) return false;
-      if (o.hijacked) {
-        for (const [r, n] of Object.entries(def.in)) s.res[r] -= n;
-        o.viralCycles = (o.viralCycles || 0) + 1;
-        if (o.viralCycles % 3 === 0 && s.virus.inside < 8) { s.virus.inside++; log(s, '바이러스 복제'); }
-        return true;
-      }
-      if (!hasRoom(s, def.out)) return false;
-      apply(s, def.in, def.out);
-      s.stats.proteinMade++;
-      flow(s, o.id, 'cyto', 'protein');
-      return true;
-    });
+  for (const e of s.ents.values()) if (e.type === 'ribosome') e.hijacked = h++ < s.virus.inside;
+
+  // 기계
+  for (const e of s.ents.values()) {
+    if (e.type === 'belt' || e.type === 'hub') continue;
+    const d = def(s, e.type);
+    let rate = d.rate;
+    if (e.type === 'transporter' && e.mode === 'glucose') rate *= s.env.glucose;
+    e.progress += rate * eff * dt;
+    while (e.progress >= 1) {
+      if (!craft(s, e)) { e.progress = 1; break; }
+      e.progress -= 1;
+    }
+    if (d.poolDrainPerSec && s.res.waste > 0 && accepts(s, e, 'waste')) {
+      e.drain = (e.drain || 0) + d.poolDrainPerSec * dt;
+      if (e.drain >= 1) { e.drain--; s.res.waste--; deliver(s, e, 'waste'); }
+    }
+    pushOutputs(s, e);
   }
 
-  // 7. 리소좀: 침투 바이러스 우선 분해, 아니면 폐기물 → 아미노산
-  for (const o of s.org) {
-    if (o.type !== 'lysosome') continue;
-    const def = cfg.organelles.lysosome;
-    runReactor(s, o, def.rate * eff, dt, () => {
-      if (s.virus.inside > 0) { s.virus.inside--; log(s, '리소좀: 바이러스 분해'); return true; }
-      if (!hasInputs(s, def.in) || !hasRoom(s, def.out)) return false;
-      apply(s, def.in, def.out);
-      flow(s, 'cyto', o.id, 'waste');
-      return true;
-    });
-  }
+  moveBelts(s, dt);
 
-  // 8. 골지체: 막 수리
-  for (const o of s.org) {
-    if (o.type !== 'golgi') continue;
-    const def = cfg.organelles.golgi;
-    if (s.membrane >= def.activeBelowMembrane) { o.progress = 0; continue; }
-    runReactor(s, o, def.rate * eff, dt, () => {
-      if (!hasInputs(s, def.in)) return false;
-      apply(s, def.in, {});
-      s.membrane = Math.min(H.membraneMax, s.membrane + def.out.$membrane);
-      flow(s, o.id, 'membrane', 'protein');
-      return true;
-    });
-  }
+  // 기본 배출 (막 확산)
+  const ex = cfg.excretion;
+  s.acc.excrete += (s.stage === 'prokaryote' ? ex.prokaryotePerArea * s.size * s.size : ex.eukaryote) * dt;
+  while (s.acc.excrete >= 1) { s.acc.excrete--; if (s.res.waste > 0) s.res.waste--; }
 
-  // 8b. 기본 막 합성 (모든 단계, 자연 마모 상쇄 수준)
+  // 기본 막 합성 (핵 저장 단백질 사용)
   const ms = cfg.membraneSynthesis;
-  s.msHolder ??= { progress: 0 };
   if (s.membrane < ms.activeBelowMembrane) {
-    runReactor(s, s.msHolder, ms.rate * eff, dt, () => {
-      if (!hasInputs(s, ms.in)) return false;
-      apply(s, ms.in, {});
+    s.acc.synth += ms.rate * dt;
+    if (s.acc.synth >= 1 && s.res.protein >= ms.protein) {
+      s.acc.synth--;
+      s.res.protein -= ms.protein;
       s.membrane = Math.min(H.membraneMax, s.membrane + ms.membrane);
-      return true;
-    });
-  } else s.msHolder.progress = 0;
-
-  // 9. 기본 배출
-  const ex = cfg.baseExcretionPerSec;
-  const excr = s.stage === 'prokaryote' ? ex.prokaryotePerArea * s.size * s.size : ex.eukaryote;
-  s.acc.excrete += excr * dt;
-  while (s.acc.excrete >= 1) {
-    s.acc.excrete -= 1;
-    if (s.res.waste > 0) { s.res.waste--; flow(s, 'cyto', 'env', 'waste'); }
-  }
-
-  // 10. 유지비
-  s.acc.upkeep += totalUpkeep(s) * dt;
-  while (s.acc.upkeep >= 1) {
-    s.acc.upkeep -= 1;
-    if (s.res.atp > 0) s.res.atp--;
-  }
-
-  // 11. 세포막: 마모 + 바이러스
-  s.membrane -= H.membraneWearPerSec * dt;
-  const vcfg = cfg.threats.virus;
-  if (s.virus.outside > 0) {
-    s.membrane -= vcfg.membraneDamagePerParticlePerSec * s.virus.outside * dt;
-    if (s.membrane < vcfg.infiltrateBelowMembrane) {
-      for (let i = 0; i < s.virus.outside; i++) {
-        if (s.rand() < vcfg.infiltrateChancePerSec * dt) {
-          s.virus.outside--; s.virus.inside++;
-          log(s, '바이러스 침투 — 리보솜 탈취');
-          break;
-        }
-      }
     }
   }
-  if (s.stage === 'prokaryote' && s.virus.inside > 0) {
-    s.virus.decay += dt;
-    if (s.virus.decay >= 20) { s.virus.decay = 0; s.virus.inside--; }
+
+  // 유지비
+  s.acc.upkeep += totalUpkeep(s) * dt;
+  while (s.acc.upkeep >= 1) { s.acc.upkeep--; if (s.res.atp > 0) s.res.atp--; }
+
+  // 세포막: 마모 + 바이러스
+  s.membrane -= H.membraneWearPerSec * dt;
+  const V = cfg.threats.virus;
+  if (s.virus.outside > 0) {
+    s.membrane -= V.membraneDamagePerParticlePerSec * s.virus.outside * dt;
+    if (s.membrane < V.infiltrateBelowMembrane && s.rand() < V.infiltrateChancePerSec * s.virus.outside * dt) {
+      s.virus.outside--;
+      s.virus.inside++;
+      log(s, '바이러스 침투: 리보솜 탈취');
+    }
   }
+  if (s.stage === 'prokaryote' && s.virus.inside > 0 && (s.virus.decay += dt) >= 20) { s.virus.decay = 0; s.virus.inside--; }
   s.membrane = Math.max(0, s.membrane);
 
-  // 12. 폐기물 임계: 소기관 손상
+  // 폐기물 임계: 소기관 손상
   if (wasteCrit) {
-    for (const o of s.org) {
-      o.hp -= (o.type === 'nucleus' ? H.nucleusDamagePerSec : H.wasteDamagePerSec) * dt;
-    }
-    const dead = s.org.filter((o) => o.hp <= 0);
-    for (const o of dead) {
-      if (o.type === 'nucleus') return lose(s, '핵 파괴');
-      s.org.splice(s.org.indexOf(o), 1);
-      log(s, `${cfg.organelles[o.type].label} 손상으로 소실`);
+    for (const e of [...s.ents.values()]) {
+      if (e.type === 'belt') continue;
+      e.hp -= (e.type === 'hub' ? H.nucleusDamagePerSec : H.wasteDamagePerSec) * dt;
+      if (e.hp <= 0) {
+        if (e.type === 'hub') return lose(s, '핵 파괴');
+        removeEntity(s, e);
+        log(s, `${def(s, e.type).label} 손상으로 소실`);
+      }
     }
   }
 
-  // 13. 막 임계: 내용물 유출
+  // 막 임계: 내용물 유출
   const memCrit = s.membrane < H.membraneCritical;
   if (memCrit) {
-    for (const r of RES) {
-      s.acc.leak[r] = (s.acc.leak[r] || 0) + s.res[r] * H.leakFractionPerSec * dt;
-      const n = Math.floor(s.acc.leak[r]);
-      if (n > 0) { s.res[r] = Math.max(0, s.res[r] - n); s.acc.leak[r] -= n; }
+    for (const b of s.ents.values()) {
+      if (b.type === 'belt' && b.items.length && s.rand() < H.leakFractionPerSec * 4 * dt) b.items.pop();
+    }
+    for (const r of ['atp', 'protein']) {
+      if (s.rand() < H.leakFractionPerSec * s.res[r] * dt) s.res[r] = Math.max(0, s.res[r] - 1);
     }
   }
 
-  // 14. 항상성 타이머
-  const atpCrit = s.res.atp <= 0;
-  s.crit.atp = atpCrit ? s.crit.atp + dt : 0;
+  // 항상성 타이머
+  s.crit.atp = s.res.atp <= 0 ? s.crit.atp + dt : 0;
   s.crit.waste = wasteCrit ? s.crit.waste + dt : 0;
   s.crit.membrane = memCrit ? s.crit.membrane + dt : 0;
-  for (const k of ['atp', 'waste', 'membrane']) {
-    if (s.crit[k] >= H.criticalSec) {
-      const names = { atp: 'ATP 고갈', waste: '폐기물 축적', membrane: '세포막 붕괴' };
-      return lose(s, `항상성 붕괴: ${names[k]}`);
-    }
-  }
+  const names = { atp: 'ATP 고갈', waste: '폐기물 축적', membrane: '세포막 붕괴' };
+  for (const k of Object.keys(names)) if (s.crit[k] >= H.criticalSec) return lose(s, `항상성 붕괴: ${names[k]}`);
 
-  // 15. 공생 통합
+  // 공생 통합
   if (s.symbiosis) {
-    if (atpCrit || wasteCrit || memCrit) {
+    if (s.res.atp <= 0 || wasteCrit || memCrit) {
       s.symbiosis = null;
-      log(s, '공생 실패 — 항상성 불안정으로 포획 세균 소화됨');
-    } else {
-      s.symbiosis.elapsed += dt;
-      if (s.symbiosis.elapsed >= s.symbiosis.duration) completeSymbiosis(s);
-    }
+      log(s, '공생 실패: 항상성 불안정으로 포획 세균 소화됨');
+    } else if ((s.symbiosis.elapsed += dt) >= s.symbiosis.duration) completeSymbiosis(s);
   }
 }
 
 function lose(s, reason) {
   s.status = 'lost';
   s.reason = reason;
-  log(s, `세포 사멸 — ${reason}`);
+  log(s, `세포 사멸: ${reason}`);
+}
+
+function scheduleThreat(s, delay) {
+  const pool = s.stage === 'prokaryote' ? ['hypoxia', 'starvation'] : THREATS;
+  return { type: pool[Math.floor(s.rand() * pool.length)], at: s.t + delay, warned: false };
 }
 
 function updateThreats(s, dt) {
   const T = s.cfg.threats;
   const p = s.threat.pending;
-  if (p && !p.warned && s.t >= p.at - T.warningSec) {
-    p.warned = true;
-    log(s, `경고: ${T[p.type].label} ${T.warningSec}초 후 발생`);
-  }
+  if (p && !p.warned && s.t >= p.at - T.warningSec) { p.warned = true; log(s, `경고: ${T[p.type].label} ${T.warningSec}초 후 발생`); }
   if (p && s.t >= p.at) {
-    const def = T[p.type];
-    s.threat.active.push({ type: p.type, until: s.t + def.durationSec });
-    if (p.type === 'virus') s.virus.outside += def.particles;
-    log(s, `${def.label} 발생`);
+    const d = T[p.type];
+    s.threat.active.push({ type: p.type, until: s.t + d.durationSec });
+    if (p.type === 'virus') s.virus.outside += d.particles;
+    log(s, `${d.label} 발생`);
     const [a, b] = T.intervalSec;
-    s.threat.pending = scheduleThreat(s, def.durationSec + a + s.rand() * (b - a));
+    s.threat.pending = scheduleThreat(s, d.durationSec + a + s.rand() * (b - a));
   }
   s.threat.active = s.threat.active.filter((a) => {
     if (s.t < a.until) return true;

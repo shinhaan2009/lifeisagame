@@ -1,28 +1,29 @@
-// 세포 관리 시뮬레이션 v0.1 — 렌더링·UI. 시뮬레이션은 sim.js(고정 10 Hz)와 분리.
+// 세포 관리 시뮬레이션 v0.2 — 그리드 렌더링·입력·패널. 시뮬레이션은 sim.js.
 import * as S from './sim.js';
 
 const $ = (id) => document.getElementById(id);
 const cv = $('cv');
 const ctx = cv.getContext('2d');
-const FG = '#000', BG = '#fff', DIM = '#888';
+const FG = '#000', BG = '#fff', GRID = '#e4e4e4', DIM = '#8a8a8a', CHEV = '#b5b5b5';
 
-const RES_LABEL = { glucose: '포도당', o2: '산소 O₂', amino: '아미노산', atp: 'ATP', pyruvate: '피루브산', protein: '단백질', waste: '폐기물' };
-const BUILD_ORDER = ['transporter', 'respChain', 'ribosome', 'mitochondrion', 'lysosome', 'golgi'];
-const IO = (d) => {
-  const f = (o) => Object.entries(o).map(([k, v]) => `${RES_LABEL[k] || (k === '$substrate' ? '기질' : '막')} ${v}`).join(' + ');
-  return `${f(d.in)} → ${f(d.out)}`;
-};
+const ITEM_LABEL = { glucose: '포도당', amino: '아미노산', pyruvate: '피루브산', protein: '단백질', waste: '폐기물' };
 
-let cfg, sim, paused = false, speed = 1, acc = 0, last = performance.now();
-let placing = null, selected = null, hover = null, mouse = null;
-let particles = [];
+let cfg, sim;
+let paused = false, speed = 1, acc = 0, last = performance.now();
+let tool = null;          // 건물 타입 | 'remove' | null
+let toolDir = 0;          // 미세소관 방향
+let hoverTile = null;
+let selectedId = null;
+let drag = null;
+let viewR = 7;            // 화면 반지름(타일), 성장 시 부드럽게 보간
 let atpHist = [];
+let lastHotKey = '';
 
 async function boot() {
   try {
     cfg = await (await fetch('config.json')).json();
-  } catch (e) {
-    $('hint').textContent = 'config.json을 불러오지 못했습니다. 로컬 서버(예: python3 -m http.server)로 여세요.';
+  } catch {
+    $('hint').textContent = 'config.json을 불러오지 못했습니다. 로컬 서버(python3 -m http.server)로 여세요.';
     return;
   }
   buildLegend();
@@ -32,107 +33,101 @@ async function boot() {
 
 function restart() {
   sim = S.createSim(cfg, { seed: (Math.random() * 1e9) | 0 });
-  particles = []; selected = null; placing = null; atpHist = [];
+  selectedId = null; tool = null; atpHist = []; drag = null;
+  viewR = S.radius(sim) + 2;
   $('overlay').hidden = true;
-  for (const o of sim.org) autoPlace(o);
+  lastHotKey = '';
 }
 
 // ---------- 좌표 ----------
 
-function view() {
+function layout() {
   const r = cv.getBoundingClientRect();
-  const W = r.width, H = r.height;
-  const base = Math.min(W, H) * 0.42;
-  const scale = sim.stage === 'prokaryote' ? 0.45 + 0.18 * sim.size : 1;
-  return { W, H, cx: W / 2, cy: H / 2, R: base * scale };
+  const T = Math.max(8, Math.floor(Math.min(r.width, r.height) / (2 * viewR + 1)));
+  return { W: r.width, H: r.height, T, cx: Math.round(r.width / 2), cy: Math.round(r.height / 2) };
 }
-
-function slotOrgs() {
-  return sim.org.filter((o) => cfg.organelles[o.type].membraneSlot);
-}
-
-function orgXY(o, v) {
-  if (cfg.organelles[o.type].membraneSlot) {
-    return { x: v.cx + Math.cos(o.angle) * v.R, y: v.cy + Math.sin(o.angle) * v.R };
-  }
-  return { x: v.cx + o.x * v.R, y: v.cy + o.y * v.R };
-}
-
-function autoPlace(o, at) {
-  const def = cfg.organelles[o.type];
-  if (def.membraneSlot) {
-    if (at) { o.angle = Math.atan2(at.y, at.x); return; }
-    const used = slotOrgs().filter((x) => x !== o && x.angle != null).map((x) => x.angle);
-    let best = 0, bestGap = -1;
-    for (let k = 0; k < 72; k++) {
-      const a = (k / 72) * Math.PI * 2;
-      const gap = used.length ? Math.min(...used.map((u) => Math.abs(Math.atan2(Math.sin(a - u), Math.cos(a - u))))) : 1;
-      if (gap > bestGap) { bestGap = gap; best = a; }
-    }
-    o.angle = best;
-    return;
-  }
-  if (o.type === 'nucleus') { o.x = 0; o.y = 0; return; }
-  if (at) {
-    const d = Math.hypot(at.x, at.y), m = 0.78;
-    o.x = d > m ? (at.x / d) * m : at.x; o.y = d > m ? (at.y / d) * m : at.y;
-    return;
-  }
-  for (let k = 0; k < 40; k++) {
-    const a = Math.random() * Math.PI * 2, d = 0.3 + Math.random() * 0.45;
-    const x = Math.cos(a) * d, y = Math.sin(a) * d;
-    if (sim.org.every((p) => p === o || p.x == null || Math.hypot(p.x - x, p.y - y) > 0.18)) { o.x = x; o.y = y; return; }
-  }
-  o.x = 0.4; o.y = 0.4;
-}
-
-function toCell(px, py) {
-  const v = view();
-  return { x: (px - v.cx) / v.R, y: (py - v.cy) / v.R };
-}
-
-function pickOrg(px, py) {
-  const v = view();
-  let best = null, bd = 18;
-  for (const o of sim.org) {
-    const p = orgXY(o, v);
-    const d = Math.hypot(p.x - px, p.y - py) - (o.type === 'nucleus' ? v.R * 0.16 : 0);
-    if (d < bd) { bd = d; best = o; }
-  }
-  return best;
+const tileCenter = (L, x, y) => [L.cx + x * L.T, L.cy + y * L.T];
+function screenToTile(px, py) {
+  const L = layout();
+  return { x: Math.round((px - L.cx) / L.T), y: Math.round((py - L.cy) / L.T) };
 }
 
 // ---------- 입력 ----------
 
-cv.addEventListener('pointermove', (e) => {
-  const r = cv.getBoundingClientRect();
-  mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
-  hover = placing ? null : pickOrg(mouse.x, mouse.y);
-});
-cv.addEventListener('pointerleave', () => { mouse = null; hover = null; });
-cv.addEventListener('click', (e) => {
-  const r = cv.getBoundingClientRect();
-  const px = e.clientX - r.left, py = e.clientY - r.top;
-  if (placing) {
-    const at = toCell(px, py);
-    if (Math.hypot(at.x, at.y) > 1.25) return;
-    const o = S.build(sim, placing, null);
-    if (o) { autoPlace(o, at); selected = o.id; }
-    if (!e.shiftKey || !S.canBuild(sim, placing).ok) setPlacing(null);
+const toolType = () => (tool && tool !== 'remove' ? tool : null);
+
+function act(x, y, button) {
+  if (button === 2 || tool === 'remove') {
+    const e = S.entityAt(sim, x, y);
+    if (e && e.id === selectedId) selectedId = null;
+    S.remove(sim, x, y);
     return;
   }
-  const o = pickOrg(px, py);
-  selected = o ? o.id : null;
+  const t = toolType();
+  if (t) {
+    const [w, h] = S.dims(sim, t);
+    const e = S.place(sim, t, x - Math.floor((w - 1) / 2), y - Math.floor((h - 1) / 2), toolDir);
+    if (e && t !== 'belt') selectedId = e.id;
+    return;
+  }
+  const e = S.entityAt(sim, x, y);
+  selectedId = e ? e.id : null;
+}
+
+cv.addEventListener('contextmenu', (e) => e.preventDefault());
+cv.addEventListener('pointerdown', (ev) => {
+  cv.setPointerCapture(ev.pointerId);
+  const r = cv.getBoundingClientRect();
+  const t = screenToTile(ev.clientX - r.left, ev.clientY - r.top);
+  drag = { last: t, button: ev.button };
+  act(t.x, t.y, ev.button);
 });
+cv.addEventListener('pointermove', (ev) => {
+  const r = cv.getBoundingClientRect();
+  const t = screenToTile(ev.clientX - r.left, ev.clientY - r.top);
+  hoverTile = t;
+  if (!drag || (t.x === drag.last.x && t.y === drag.last.y)) return;
+  // 드래그: 미세소관은 이동 방향을 따라 깔고 직전 타일 방향도 맞춘다
+  let cur = drag.last;
+  while (cur.x !== t.x || cur.y !== t.y) {
+    const dx = Math.sign(t.x - cur.x), dy = dx ? 0 : Math.sign(t.y - cur.y);
+    const next = { x: cur.x + dx, y: cur.y + dy };
+    if (tool === 'belt' && drag.button === 0) {
+      toolDir = S.DIRS.findIndex(([a, b]) => a === dx && b === dy);
+      const prev = S.entityAt(sim, cur.x, cur.y);
+      if (prev && prev.type === 'belt') prev.dir = toolDir;
+      act(next.x, next.y, 0);
+    } else if (drag.button === 2 || tool === 'remove') {
+      act(next.x, next.y, 2);
+    }
+    cur = next;
+  }
+  drag.last = t;
+});
+cv.addEventListener('pointerup', () => { drag = null; });
+cv.addEventListener('pointerleave', () => { hoverTile = null; });
+
+function setTool(t) {
+  tool = tool === t ? null : t;
+  cv.style.cursor = tool ? 'crosshair' : 'default';
+  lastHotKey = '';
+}
+
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { setPlacing(null); selected = null; }
-  if (e.key === ' ' && e.target === document.body) { e.preventDefault(); togglePause(); }
+  const k = e.key.toLowerCase();
+  if (k === 'escape') { tool = null; setTool(null); selectedId = null; }
+  else if (k === ' ') { e.preventDefault(); togglePause(); }
+  else if (k === 'r') {
+    const h = hoverTile && S.entityAt(sim, hoverTile.x, hoverTile.y);
+    if (!toolType() && h && h.type === 'belt') S.rotate(sim, h.x, h.y);
+    else { toolDir = (toolDir + 1) % 4; lastHotKey = ''; }
+  } else if (k === 'x') setTool('remove');
+  else {
+    const t = Object.entries(cfg.buildings).find(([, d]) => d.key === k && d.stages.includes(sim.stage));
+    if (t) setTool(t[0]);
+  }
 });
 
-function setPlacing(type) {
-  placing = type;
-  cv.classList.toggle('placing', !!type);
-}
 function togglePause() {
   paused = !paused;
   $('pause').setAttribute('aria-pressed', paused);
@@ -147,83 +142,52 @@ $('ovRestart').onclick = restart;
 // ---------- 루프 ----------
 
 function frame(now) {
-  const dtReal = Math.min(0.25, (now - last) / 1000);
+  const dt = Math.min(0.25, (now - last) / 1000);
   last = now;
-  const tickDt = 1 / cfg.tickHz;
   if (!paused && sim.status === 'running') {
-    acc += dtReal * speed;
+    acc += dt * speed;
+    const tickDt = 1 / cfg.tickHz;
     while (acc >= tickDt) {
       acc -= tickDt;
-      const before = sim.org.length;
       S.step(sim);
-      spawnParticles();
-      if (sim.tick % cfg.tickHz === 0) {
-        atpHist.push(sim.stats.atpMade);
-        if (atpHist.length > 6) atpHist.shift();
-      }
-      if (sim.org.length !== before || sim.org.some((o) => o.angle == null && o.x == null)) {
-        for (const o of sim.org) if (o.angle == null && o.x == null) autoPlace(o);
-      }
+      if (sim.tick % cfg.tickHz === 0) { atpHist.push(sim.stats.atpMade); if (atpHist.length > 6) atpHist.shift(); }
     }
   }
-  render(now / 1000, dtReal * (paused ? 0 : speed));
-  if (sim.tick % 2 === 0 || paused) updatePanel();
+  viewR += (S.radius(sim) + 2 - viewR) * Math.min(1, dt * 3);
+  render(now / 1000);
+  updatePanel();
   requestAnimationFrame(frame);
-}
-
-// ---------- 파티클 (자원 흐름 시각화) ----------
-
-function anchor(ref, v) {
-  if (typeof ref === 'number') {
-    const o = sim.org.find((x) => x.id === ref);
-    if (o) return orgXY(o, v);
-  }
-  const a = Math.random() * Math.PI * 2;
-  if (ref === 'env') return { x: v.cx + Math.cos(a) * v.R * 1.35, y: v.cy + Math.sin(a) * v.R * 1.35 };
-  if (ref === 'membrane') return { x: v.cx + Math.cos(a) * v.R, y: v.cy + Math.sin(a) * v.R };
-  const d = Math.sqrt(Math.random()) * v.R * 0.7;
-  return { x: v.cx + Math.cos(a) * d, y: v.cy + Math.sin(a) * d };
-}
-
-function spawnParticles() {
-  const v = view();
-  for (const f of sim.flows) {
-    if (particles.length > 260) break;
-    const a = anchor(f.src, v), b = anchor(f.dst, v);
-    particles.push({ a, b, t: 0, res: f.res });
-  }
-}
-
-function drawToken(x, y, res, g = ctx) {
-  g.beginPath();
-  switch (res) {
-    case 'atp': g.arc(x, y, 2.2, 0, 7); g.fill(); break;
-    case 'o2': g.arc(x, y, 2.6, 0, 7); g.stroke(); break;
-    case 'glucose': g.rect(x - 2.4, y - 2.4, 4.8, 4.8); g.stroke(); break;
-    case 'amino': g.moveTo(x, y - 3); g.lineTo(x + 3, y + 2.4); g.lineTo(x - 3, y + 2.4); g.closePath(); g.stroke(); break;
-    case 'protein': g.moveTo(x, y - 3.2); g.lineTo(x + 3.2, y); g.lineTo(x, y + 3.2); g.lineTo(x - 3.2, y); g.closePath(); g.fill(); break;
-    case 'pyruvate': g.rect(x - 1.6, y - 1.6, 3.2, 3.2); g.fill(); break;
-    case 'waste': g.moveTo(x - 2.5, y - 2.5); g.lineTo(x + 2.5, y + 2.5); g.moveTo(x + 2.5, y - 2.5); g.lineTo(x - 2.5, y + 2.5); g.stroke(); break;
-  }
-}
-
-function buildLegend() {
-  const el = $('legend');
-  for (const r of S.RES) {
-    const c = document.createElement('canvas');
-    c.width = 24; c.height = 24; c.style.width = '12px'; c.style.height = '12px'; c.style.verticalAlign = '-2px';
-    const g = c.getContext('2d');
-    g.scale(2, 2); g.strokeStyle = FG; g.fillStyle = FG; g.lineWidth = 1;
-    drawToken(6, 6, r, g);
-    const span = document.createElement('span');
-    span.append(c, ' ' + RES_LABEL[r]);
-    el.append(span);
-  }
 }
 
 // ---------- 렌더 ----------
 
-function render(t, dtSim) {
+function drawToken(g, x, y, item, r) {
+  g.beginPath();
+  switch (item) {
+    case 'glucose': g.rect(x - r, y - r, 2 * r, 2 * r); g.fillStyle = BG; g.fill(); g.stroke(); break;
+    case 'amino': g.moveTo(x, y - r * 1.15); g.lineTo(x + r, y + r * 0.85); g.lineTo(x - r, y + r * 0.85); g.closePath(); g.fillStyle = BG; g.fill(); g.stroke(); break;
+    case 'pyruvate': g.arc(x, y, r, 0, 7); g.fillStyle = BG; g.fill(); g.stroke(); g.beginPath(); g.arc(x, y, r * 0.4, 0, 7); g.fillStyle = FG; g.fill(); break;
+    case 'protein': g.moveTo(x, y - r * 1.2); g.lineTo(x + r * 1.2, y); g.lineTo(x, y + r * 1.2); g.lineTo(x - r * 1.2, y); g.closePath(); g.fillStyle = FG; g.fill(); break;
+    case 'waste': g.arc(x, y, r, 0, 7); g.fillStyle = BG; g.fill(); g.stroke(); g.beginPath(); g.moveTo(x - r * 0.6, y - r * 0.6); g.lineTo(x + r * 0.6, y + r * 0.6); g.moveTo(x + r * 0.6, y - r * 0.6); g.lineTo(x - r * 0.6, y + r * 0.6); g.stroke(); break;
+  }
+  g.fillStyle = FG;
+}
+
+function buildLegend() {
+  const el = $('legend');
+  for (const it of S.ITEMS) {
+    const c = document.createElement('canvas');
+    c.width = 28; c.height = 28; c.style.width = '14px'; c.style.height = '14px'; c.style.verticalAlign = '-3px';
+    const g = c.getContext('2d');
+    g.scale(2, 2); g.strokeStyle = FG; g.lineWidth = 1;
+    drawToken(g, 7, 7, it, 4);
+    const span = document.createElement('span');
+    span.append(c, ' ' + ITEM_LABEL[it]);
+    el.append(span);
+  }
+}
+
+function render(t) {
   const dpr = window.devicePixelRatio || 1;
   const rect = cv.getBoundingClientRect();
   if (cv.width !== Math.round(rect.width * dpr) || cv.height !== Math.round(rect.height * dpr)) {
@@ -231,239 +195,272 @@ function render(t, dtSim) {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = BG; ctx.fillRect(0, 0, rect.width, rect.height);
-  const v = view();
-  ctx.strokeStyle = FG; ctx.fillStyle = FG; ctx.lineWidth = 1;
-  ctx.font = '11px "IBM Plex Sans KR", system-ui, sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const L = layout(), T = L.T;
+  const ext = Math.ceil(Math.max(L.W, L.H) / T / 2) + 1;
+  const R = S.radius(sim);
 
-  // 환경 O₂ 농도: 바깥 점묘 밀도
-  ctx.fillStyle = DIM;
-  const dots = Math.round(60 * sim.env.o2);
-  for (let i = 0; i < dots; i++) {
-    const a = i * 2.39996 + t * 0.02, d = v.R * (1.12 + ((i * 37) % 50) / 100);
-    ctx.fillRect(v.cx + Math.cos(a) * d, v.cy + Math.sin(a) * d, 1.2, 1.2);
+  // 환경 O₂ 점묘 + 내부 격자
+  ctx.lineWidth = 1;
+  for (let x = -ext; x <= ext; x++) for (let y = -ext; y <= ext; y++) {
+    const [px, py] = tileCenter(L, x, y);
+    const k = S.tileKind(sim, x, y);
+    if (k === 'env') {
+      const hsh = Math.abs((x * 73856093) ^ (y * 19349663));
+      if ((hsh % 100) / 100 < 0.35 * sim.env.o2) { ctx.fillStyle = DIM; ctx.fillRect(px + (hsh % 7) - 3, py + ((hsh >> 4) % 7) - 3, 1.5, 1.5); }
+    } else if (k === 'interior') {
+      ctx.strokeStyle = GRID;
+      ctx.strokeRect(px - T / 2 + 0.5, py - T / 2 + 0.5, T - 1, T - 1);
+    }
   }
-  ctx.fillStyle = FG;
+  const tt = toolType();
+  if (tt && S.def(sim, tt).place === 'membrane') {
+    ctx.strokeStyle = DIM; ctx.setLineDash([2, 2]);
+    for (let x = -R - 1; x <= R + 1; x++) for (let y = -R - 1; y <= R + 1; y++) {
+      if (S.tileKind(sim, x, y) !== 'membrane' || S.entityAt(sim, x, y)) continue;
+      const [px, py] = tileCenter(L, x, y);
+      ctx.strokeRect(px - T / 2 + 2, py - T / 2 + 2, T - 4, T - 4);
+    }
+    ctx.setLineDash([]);
+  }
 
   // 세포막
-  const m = sim.membrane / cfg.homeostasis.membraneMax;
-  ctx.lineWidth = 1 + 4 * m;
-  if (sim.membrane < cfg.homeostasis.membraneCritical) ctx.setLineDash([6, 5]);
-  ctx.beginPath(); ctx.arc(v.cx, v.cy, v.R, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = FG; ctx.lineWidth = 1 + 4 * (sim.membrane / cfg.homeostasis.membraneMax);
+  if (sim.membrane < cfg.homeostasis.membraneCritical) ctx.setLineDash([8, 6]);
+  ctx.beginPath(); ctx.arc(L.cx, L.cy, R * T, 0, Math.PI * 2); ctx.stroke();
   ctx.setLineDash([]);
-  if (sim.stage === 'prokaryote') {
-    // 핵양체: 불규칙 루프
-    ctx.lineWidth = 1; ctx.beginPath();
-    for (let k = 0; k <= 60; k++) {
-      const a = (k / 60) * Math.PI * 2, rr = v.R * (0.16 + 0.04 * Math.sin(a * 5 + t * 0.3));
-      const x = v.cx + Math.cos(a) * rr, y = v.cy + Math.sin(a) * rr * 0.7;
-      k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-    }
-    ctx.stroke(); ctx.fillText('핵양체', v.cx, v.cy);
-  }
 
-  // 공생 진행
-  if (sim.symbiosis) {
-    const p = sim.symbiosis.elapsed / sim.symbiosis.duration;
-    const bx = v.cx + v.R * 0.45 * Math.cos(t * 0.5), by = v.cy + v.R * 0.45 * Math.sin(t * 0.5);
-    ctx.lineWidth = 1; ctx.beginPath(); ctx.ellipse(bx, by, 16, 9, t * 0.5, 0, 7); ctx.stroke();
-    ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(bx, by, 22, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); ctx.stroke();
-    ctx.lineWidth = 1; ctx.fillText(`공생 ${Math.round(p * 100)}%`, bx, by + 34);
-  }
-
-  // 소기관
-  for (const o of sim.org) drawOrg(o, orgXY(o, v), v, t);
+  ctx.lineWidth = 1;
+  for (const e of sim.ents.values()) if (e.type === 'belt') drawBelt(e, L, t);
+  for (const e of sim.ents.values()) if (e.type !== 'belt') drawMachine(e, L);
+  for (const e of sim.ents.values()) if (e.type === 'belt') drawBeltItems(e, L);
 
   // 바이러스
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = FG; ctx.lineWidth = 1;
   for (let i = 0; i < sim.virus.outside; i++) {
-    const a = t * 0.4 + (i / Math.max(1, sim.virus.outside)) * Math.PI * 2;
-    hex(v.cx + Math.cos(a) * v.R * 1.12, v.cy + Math.sin(a) * v.R * 1.12, 6);
+    const a = t * 0.35 + (i / sim.virus.outside) * Math.PI * 2;
+    hex(L.cx + Math.cos(a) * (R + 1.3) * T, L.cy + Math.sin(a) * (R + 1.3) * T, T * 0.3);
   }
 
-  // 파티클
-  ctx.lineWidth = 1;
-  particles = particles.filter((p) => (p.t += dtSim / 0.8) < 1);
-  for (const p of particles) {
-    const e = p.t * p.t * (3 - 2 * p.t);
-    drawToken(p.a.x + (p.b.x - p.a.x) * e, p.a.y + (p.b.y - p.a.y) * e, p.res);
+  // 공생 진행 링
+  if (sim.symbiosis) {
+    const p = sim.symbiosis.elapsed / sim.symbiosis.duration;
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(L.cx, L.cy, T * 2.4, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 1;
   }
 
-  // 배치 고스트
-  if (placing && mouse) {
-    const def = cfg.organelles[placing];
-    let p = mouse;
-    if (def.membraneSlot) {
-      const a = Math.atan2(mouse.y - v.cy, mouse.x - v.cx);
-      p = { x: v.cx + Math.cos(a) * v.R, y: v.cy + Math.sin(a) * v.R };
+  // 배치 미리보기
+  if (hoverTile) {
+    if (tt) {
+      const [w, h] = S.dims(sim, tt);
+      const x0 = hoverTile.x - Math.floor((w - 1) / 2), y0 = hoverTile.y - Math.floor((h - 1) / 2);
+      const c = S.canPlace(sim, tt, x0, y0);
+      const ok = c.ok || (tt === 'belt' && S.entityAt(sim, hoverTile.x, hoverTile.y)?.type === 'belt');
+      const [px, py] = tileCenter(L, x0, y0);
+      ctx.strokeStyle = FG; ctx.lineWidth = 2;
+      if (!ok) ctx.setLineDash([4, 3]);
+      ctx.strokeRect(px - T / 2 + 1, py - T / 2 + 1, w * T - 2, h * T - 2);
+      ctx.setLineDash([]); ctx.lineWidth = 1.5;
+      if (tt === 'belt') arrow(px, py, toolDir, T * 0.32);
+      ctx.lineWidth = 1;
+      if (!ok) label(c.why, px + (w - 1) * T / 2, py - T * 0.95);
+    } else {
+      const [px, py] = tileCenter(L, hoverTile.x, hoverTile.y);
+      const rm = tool === 'remove';
+      ctx.strokeStyle = rm ? FG : DIM; ctx.lineWidth = rm ? 2 : 1;
+      ctx.strokeRect(px - T / 2 + 1, py - T / 2 + 1, T - 2, T - 2);
+      if (rm) { ctx.beginPath(); ctx.moveTo(px - T / 4, py - T / 4); ctx.lineTo(px + T / 4, py + T / 4); ctx.moveTo(px + T / 4, py - T / 4); ctx.lineTo(px - T / 4, py + T / 4); ctx.stroke(); }
+      ctx.lineWidth = 1;
     }
-    ctx.globalAlpha = 0.45;
-    drawOrg({ type: placing, id: -1, hp: 100, angle: 0, mode: 'glucose' }, p, v, t);
-    ctx.globalAlpha = 1;
   }
+}
 
-  // 호버 라벨
-  const lab = hover || (selected && sim.org.find((o) => o.id === selected));
-  if (lab) {
-    const p = orgXY(lab, v);
-    const txt = cfg.organelles[lab.type].label + (lab.mode ? ` · ${RES_LABEL[lab.mode]}` : '');
-    const w = ctx.measureText(txt).width + 10;
-    ctx.fillStyle = BG; ctx.fillRect(p.x - w / 2, p.y - 34, w, 16);
-    ctx.strokeStyle = FG; ctx.lineWidth = 1; ctx.strokeRect(p.x - w / 2, p.y - 34, w, 16);
-    ctx.fillStyle = FG; ctx.fillText(txt, p.x, p.y - 26);
-  }
+function label(text, x, y) {
+  ctx.font = '11px "IBM Plex Sans KR", system-ui, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const w = ctx.measureText(text).width + 10;
+  ctx.fillStyle = BG; ctx.fillRect(x - w / 2, y - 8, w, 16);
+  ctx.strokeStyle = FG; ctx.lineWidth = 1; ctx.strokeRect(x - w / 2, y - 8, w, 16);
+  ctx.fillStyle = FG; ctx.fillText(text, x, y);
+}
+
+function arrow(px, py, dir, r) {
+  const [dx, dy] = S.DIRS[dir];
+  const nx = -dy, ny = dx;
+  ctx.beginPath();
+  ctx.moveTo(px + dx * r, py + dy * r);
+  ctx.lineTo(px - dx * r * 0.2 + nx * r * 0.7, py - dy * r * 0.2 + ny * r * 0.7);
+  ctx.moveTo(px + dx * r, py + dy * r);
+  ctx.lineTo(px - dx * r * 0.2 - nx * r * 0.7, py - dy * r * 0.2 - ny * r * 0.7);
+  ctx.stroke();
 }
 
 function hex(x, y, r) {
   ctx.beginPath();
-  for (let k = 0; k < 6; k++) {
-    const a = (k / 6) * Math.PI * 2;
-    k ? ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r) : ctx.moveTo(x + r, y);
-  }
+  for (let k = 0; k < 6; k++) { const a = (k / 6) * Math.PI * 2; k ? ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r) : ctx.moveTo(x + r, y); }
   ctx.closePath(); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x, y + r); ctx.lineTo(x, y + r + 4); ctx.stroke();
 }
 
-function drawOrg(o, p, v, t) {
-  const { x, y } = p;
+function drawBelt(b, L, t) {
+  const T = L.T;
+  const [px, py] = tileCenter(L, b.x, b.y);
+  const [dx, dy] = S.DIRS[b.dir];
+  const nx = -dy, ny = dx, half = T * 0.3;
+  ctx.strokeStyle = FG; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const sg of [-1, 1]) {
+    ctx.moveTo(px - dx * T / 2 + nx * half * sg, py - dy * T / 2 + ny * half * sg);
+    ctx.lineTo(px + dx * T / 2 + nx * half * sg, py + dy * T / 2 + ny * half * sg);
+  }
+  ctx.stroke();
+  // 흐름 셰브론: 정체 시 멈춘다
+  const phase = b.blocked ? 0.25 : (t * cfg.belt.speed) % 1;
+  ctx.strokeStyle = CHEV;
+  for (const k of [0, 0.5]) {
+    const o = ((phase + k) % 1) - 0.5;
+    const cx = px + dx * o * T, cy = py + dy * o * T;
+    ctx.beginPath();
+    ctx.moveTo(cx - dx * T * 0.1 + nx * half * 0.7, cy - dy * T * 0.1 + ny * half * 0.7);
+    ctx.lineTo(cx + dx * T * 0.08, cy + dy * T * 0.08);
+    ctx.lineTo(cx - dx * T * 0.1 - nx * half * 0.7, cy - dy * T * 0.1 - ny * half * 0.7);
+    ctx.stroke();
+  }
+  if (b.id === selectedId) { ctx.strokeStyle = FG; ctx.setLineDash([2, 2]); ctx.strokeRect(px - T / 2 + 1, py - T / 2 + 1, T - 2, T - 2); ctx.setLineDash([]); }
+}
+
+function drawBeltItems(b, L) {
+  const T = L.T;
+  const [px, py] = tileCenter(L, b.x, b.y);
+  const [dx, dy] = S.DIRS[b.dir];
+  ctx.strokeStyle = FG; ctx.lineWidth = 1;
+  for (const it of b.items) {
+    const o = it.pos - 0.5;
+    drawToken(ctx, px + dx * o * T, py + dy * o * T, it.type, Math.max(2.5, T * 0.13));
+  }
+}
+
+function drawMachine(e, L) {
+  const T = L.T, d = S.def(sim, e.type);
+  const [px0, py0] = tileCenter(L, e.x, e.y);
+  const x = px0 - T / 2, y = py0 - T / 2, w = e.w * T, h = e.h * T;
+  const cx = x + w / 2, cy = y + h / 2;
   ctx.save();
-  ctx.lineWidth = 1.2;
-  ctx.strokeStyle = FG; ctx.fillStyle = FG;
-  if (o.hp < 100) ctx.setLineDash([3, 2 + (100 - o.hp) / 15]);
-  const s = Math.max(0.75, Math.min(1.2, v.R / 220));
-  switch (o.type) {
-    case 'nucleus': {
-      const r = v.R * 0.17;
-      ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke();
-      ctx.beginPath(); ctx.arc(x, y, r - 4, 0, 7); ctx.stroke();
-      ctx.setLineDash([]); ctx.fillText('핵', x, y);
-      break;
-    }
-    case 'transporter': {
-      ctx.translate(x, y); ctx.rotate(o.angle);
-      ctx.fillStyle = BG; ctx.fillRect(-9 * s, -5 * s, 18 * s, 10 * s);
-      ctx.strokeRect(-9 * s, -5 * s, 18 * s, 10 * s);
-      ctx.beginPath(); ctx.moveTo(-9 * s, 0); ctx.lineTo(9 * s, 0); ctx.stroke();
-      ctx.rotate(-o.angle); ctx.fillStyle = FG;
-      ctx.fillText(o.mode === 'amino' ? 'A' : 'G', Math.cos(o.angle) * -16, Math.sin(o.angle) * -16);
-      break;
-    }
-    case 'respChain': {
-      ctx.translate(x, y); ctx.rotate(o.angle + Math.PI / 2);
-      ctx.fillStyle = BG;
-      ctx.beginPath(); ctx.moveTo(0, -8 * s); ctx.lineTo(8 * s, 6 * s); ctx.lineTo(-8 * s, 6 * s); ctx.closePath(); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = FG; ctx.beginPath(); ctx.arc(0, 1 * s, 2, 0, 7); ctx.fill();
-      break;
-    }
-    case 'ribosome': {
-      ctx.beginPath(); ctx.arc(x - 3 * s, y, 4.5 * s, 0, 7); ctx.fill();
-      ctx.beginPath(); ctx.arc(x + 4 * s, y + 1, 3.5 * s, 0, 7); ctx.fill();
-      if (o.hijacked) {
-        ctx.setLineDash([]); ctx.lineWidth = 1;
-        const hx = x, hy = y - 14;
-        ctx.beginPath();
-        for (let k = 0; k < 6; k++) { const a = (k / 6) * Math.PI * 2; k ? ctx.lineTo(hx + Math.cos(a) * 5, hy + Math.sin(a) * 5) : ctx.moveTo(hx + 5, hy); }
-        ctx.closePath(); ctx.stroke();
-      }
-      break;
-    }
-    case 'mitochondrion': {
-      const rx = 22 * s, ry = 11 * s, rot = (o.id * 1.7) % Math.PI;
-      ctx.translate(x, y); ctx.rotate(rot);
-      ctx.fillStyle = BG; ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, 7); ctx.fill(); ctx.stroke();
-      ctx.beginPath();
-      for (let k = 0; k <= 8; k++) {
-        const px = -rx * 0.7 + (k / 8) * rx * 1.4, py = (k % 2 ? 1 : -1) * ry * 0.55;
-        k ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
-      }
-      ctx.stroke();
-      break;
-    }
-    case 'lysosome': {
-      const r = 10 * s;
-      ctx.fillStyle = BG; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = FG;
-      for (let k = 0; k < 5; k++) { const a = k * 1.26 + t * 0.2; ctx.fillRect(x + Math.cos(a) * r * 0.5 - 1, y + Math.sin(a) * r * 0.5 - 1, 2, 2); }
-      break;
-    }
-    case 'golgi': {
-      ctx.translate(x, y);
-      for (let k = 0; k < 4; k++) {
-        ctx.beginPath(); ctx.arc(0, 18 * s + k * 5 * s, 18 * s, Math.PI * 1.22, Math.PI * 1.78); ctx.stroke();
-      }
-      break;
-    }
+  ctx.fillStyle = BG; ctx.strokeStyle = FG; ctx.lineWidth = e.type === 'hub' ? 2 : 1.5;
+  if (e.hp < cfg.homeostasis.hp) ctx.setLineDash([4, 2 + (cfg.homeostasis.hp - e.hp) / 12]);
+  ctx.fillRect(x + 2, y + 2, w - 4, h - 4);
+  ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
+  if (e.type === 'hub') ctx.strokeRect(x + 6, y + 6, w - 12, h - 12);
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = FG;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const fs = Math.max(9, Math.min(14, T * 0.3));
+  ctx.font = `600 ${fs}px "IBM Plex Sans KR", system-ui, sans-serif`;
+
+  if (e.type === 'hub') {
+    ctx.fillText(sim.stage === 'prokaryote' ? d.labelProkaryote : d.label, cx, cy - fs * 0.7);
+    ctx.font = `${fs}px "IBM Plex Mono", monospace`;
+    ctx.fillText(`단백질 ${sim.res.protein}`, cx, cy + fs * 0.7);
+  } else if (e.type === 'transporter' || e.type === 'exporter') {
+    ctx.lineWidth = 1.5;
+    arrow(cx, cy + T * 0.08, e.type === 'transporter' ? e.dir : (e.dir + 2) % 4, T * 0.22);
+    ctx.font = `600 ${fs * 0.85}px "IBM Plex Sans KR", system-ui, sans-serif`;
+    ctx.fillText(e.type === 'exporter' ? '배출' : e.mode === 'glucose' ? '포' : '아', cx, cy - T * 0.2);
+  } else if (e.type === 'respChain') {
+    ctx.beginPath(); ctx.moveTo(cx, cy - T * 0.26); ctx.lineTo(cx + T * 0.24, cy + T * 0.18); ctx.lineTo(cx - T * 0.24, cy + T * 0.18); ctx.closePath(); ctx.stroke();
+  } else if (e.type === 'mitochondrion') {
+    ctx.beginPath(); ctx.ellipse(cx, cy - h * 0.08, w * 0.34, h * 0.2, 0, 0, 7); ctx.stroke();
+    ctx.beginPath();
+    for (let k = 0; k <= 6; k++) { const xx = cx - w * 0.24 + (k / 6) * w * 0.48, yy = cy - h * 0.08 + (k % 2 ? 1 : -1) * h * 0.09; k ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy); }
+    ctx.stroke();
+    ctx.fillText(d.label, cx, cy + h * 0.25);
+  } else if (e.type === 'golgi') {
+    for (let k = 0; k < 4; k++) { ctx.beginPath(); ctx.arc(cx, cy + h * 0.25 + k * h * 0.07, w * 0.3, Math.PI * 1.22, Math.PI * 1.78); ctx.stroke(); }
+    ctx.fillText(d.label, cx, cy + h * 0.27);
+  } else {
+    ctx.fillText(d.short, cx, cy - fs * 0.1);
+  }
+
+  if (d.rate) ctx.fillRect(x + 5, y + h - 7, (w - 10) * Math.min(1, e.progress), 2.5);
+
+  // 상태 배지: ● 멈춤, ○ 발효, ⬡ 탈취
+  const st = d.rate ? e.status || '' : '';
+  const br = Math.max(2.5, Math.min(4.5, T * 0.11)), bx = x + w - br - 3, by = y + br + 3;
+  if (e.hijacked) { hex(bx, by, br); }
+  else if (/부족|막힘|대기|포화/.test(st) && !/막 정상/.test(st)) {
+    ctx.beginPath(); ctx.arc(bx, by, br, 0, 7); ctx.fill();
+    if (br >= 4) { ctx.fillStyle = BG; ctx.font = '700 8px system-ui'; ctx.fillText('!', bx, by + 0.5); }
+  } else if (/발효/.test(st)) {
+    ctx.beginPath(); ctx.arc(bx, by, br, 0, 7); ctx.stroke();
   }
   ctx.restore();
-  if (o.id === selected) {
-    ctx.save(); ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
-    const r = o.type === 'nucleus' ? v.R * 0.17 + 8 : 20;
-    ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke(); ctx.restore();
+  if (e.id === selectedId) {
+    ctx.strokeStyle = FG; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+    ctx.strokeRect(x - 2, y - 2, w + 4, h + 4); ctx.setLineDash([]);
   }
 }
 
 // ---------- 패널 ----------
 
 const fmt = (sec) => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+const bar = (ratio, mark) => `<div class="bar"><i style="width:${Math.max(0, Math.min(1, ratio)) * 100}%"></i>${mark != null ? `<b style="left:${mark * 100}%"></b>` : ''}</div>`;
+const setHTML = (el, html) => { if (el.dataset.k !== html) { el.dataset.k = html; el.innerHTML = html; } };
 
-function bar(ratio, mark) {
-  return `<div class="bar"><i style="width:${Math.max(0, Math.min(1, ratio)) * 100}%"></i>${mark != null ? `<b style="left:${mark * 100}%"></b>` : ''}</div>`;
-}
-
-let lastBuildKey = '';
+let panelTick = -1, panelHover = '';
 function updatePanel() {
+  const hk = (hoverTile ? `${hoverTile.x},${hoverTile.y}` : '') + ':' + selectedId;
+  if (sim.tick === panelTick && hk === panelHover && lastHotKey) return;
+  panelTick = sim.tick; panelHover = hk;
   const H = cfg.homeostasis;
   $('clock').textContent = fmt(sim.t);
-  $('stageLabel').textContent = sim.stage === 'prokaryote' ? `원핵세포 · 크기 ${sim.size}/${cfg.prokaryote.maxSize}` : '진핵세포';
+  $('stageLabel').textContent = sim.stage === 'prokaryote' ? `원핵세포 · 반지름 ${S.radius(sim)}` : '진핵세포';
 
-  // 위협
-  const th = $('threat');
   const parts = [];
   for (const a of sim.threat.active) parts.push(`<strong>${cfg.threats[a.type].label}</strong> 진행 중 · ${Math.ceil(a.until - sim.t)}초 남음`);
   const p = sim.threat.pending;
   if (p && p.warned) parts.push(`경고: <strong>${cfg.threats[p.type].label}</strong> ${Math.ceil(p.at - sim.t)}초 후`);
-  if (sim.virus.inside) parts.push(`세포 내 바이러스 ${sim.virus.inside} (리보솜 탈취)`);
-  th.innerHTML = parts.length ? parts.join('<br>') : '위협 없음';
-  th.classList.toggle('alarm', parts.length > 0);
+  if (sim.virus.inside) parts.push(`세포 내 바이러스 ${sim.virus.inside} · 리보솜 탈취 중`);
+  setHTML($('threat'), parts.length ? parts.join('<br>') : '위협 없음');
+  $('threat').classList.toggle('alarm', parts.length > 0);
 
-  // 항상성
   const wr = S.wasteRatio(sim);
-  const hrows = [
-    ['ATP 잔량', sim.res.atp / cfg.caps.atp, null, `${sim.res.atp}`, sim.crit.atp],
-    ['폐기물', wr, H.wasteCriticalRatio, `${Math.round(wr * 100)}%`, sim.crit.waste],
+  const made = atpHist.length > 1 ? (atpHist.at(-1) - atpHist[0]) / (atpHist.length - 1) : 0;
+  const rows = [
+    ['ATP', sim.res.atp / cfg.caps.atp, null, `${sim.res.atp}`, sim.crit.atp],
+    ['세포질 폐기물', wr, H.wasteCriticalRatio, `${Math.round(wr * 100)}%`, sim.crit.waste],
     ['세포막', sim.membrane / H.membraneMax, H.membraneCritical / H.membraneMax, `${Math.round(sim.membrane)}%`, sim.crit.membrane],
+    ['산소 O₂', sim.res.o2 / cfg.caps.o2, null, `${sim.res.o2}`, 0],
+    ['단백질 (핵)', sim.res.protein / cfg.caps.protein, null, `${sim.res.protein}`, 0],
   ];
-  $('homeo').innerHTML = hrows.map(([n, r, mk, val, c]) =>
-    `<div class="row"><span class="${c > 0 ? 'crit' : ''}">${n}</span>${bar(r, mk)}<span class="val mono">${c > 0 ? `${Math.floor(c)}/${H.criticalSec}s` : val}</span></div>`).join('');
+  setHTML($('homeo'), rows.map(([n, r, mk, val, c]) =>
+    `<div class="row"><span class="${c > 0 ? 'crit' : ''}">${n}</span>${bar(r, mk)}<span class="val mono">${c > 0 ? `${Math.floor(c)}/${H.criticalSec}s` : val}</span></div>`).join(''));
+  setHTML($('econ'), `ATP 생산 ${made.toFixed(1)}/s · 유지비 ${S.totalUpkeep(sim).toFixed(1)}/s${sim.stage === 'prokaryote' ? ` (부피분 ${(cfg.prokaryote.upkeepPerVolume * sim.size ** 3).toFixed(1)})` : ''}`);
 
-  // 자원
-  $('res').innerHTML = S.RES.map((r) =>
-    `<div class="row"><span>${RES_LABEL[r]}</span>${bar(sim.res[r] / cfg.caps[r])}<span class="val mono">${sim.res[r]}/${cfg.caps[r]}</span></div>`).join('')
-    + (sim.fermenting ? '<div style="font-size:11px">발효 중: 피루브산 → 폐기물</div>' : '');
-
-  // 건설
-  const slots = S.membraneSlots(sim);
-  $('slots').textContent = Number.isFinite(slots) ? `막 슬롯 ${S.usedSlots(sim)}/${slots}` : '';
-  const types = BUILD_ORDER.filter((k) => cfg.organelles[k].stages.includes(sim.stage));
-  const key = types.map((k) => `${k}:${S.canBuild(sim, k).ok}:${S.count(sim, k)}:${placing === k}`).join('|');
-  if (key !== lastBuildKey) {
-    lastBuildKey = key;
+  // 핫바
+  const types = Object.keys(cfg.buildings).filter((k) => cfg.buildings[k].stages.includes(sim.stage));
+  const key = types.map((k) => `${k}${sim.res.protein >= cfg.buildings[k].cost}${S.count(sim, k)}`).join('|') + tool + toolDir + sim.stage;
+  if (key !== lastHotKey) {
+    lastHotKey = key;
     const box = $('build'); box.innerHTML = '';
     for (const k of types) {
-      const d = cfg.organelles[k], c = S.canBuild(sim, k);
+      const d = cfg.buildings[k];
       const b = document.createElement('button');
-      b.disabled = !c.ok && placing !== k;
-      b.setAttribute('aria-pressed', placing === k);
-      b.innerHTML = `<span>${d.label} <span class="mono">×${S.count(sim, k)}</span></span><span class="mono">단백질 ${d.cost}</span><small>${IO(d)} · 유지 ${d.upkeep}/s${c.ok ? '' : ' · ' + c.why}</small>`;
-      b.onclick = () => setPlacing(placing === k ? null : k);
+      b.setAttribute('aria-pressed', tool === k);
+      b.disabled = sim.res.protein < d.cost && tool !== k;
+      b.innerHTML = `<span><kbd>${d.key}</kbd> ${d.label}${d.w ? ` <span class="mono">${d.w}×${d.h}</span>` : ''} <span class="mono">×${S.count(sim, k)}</span></span><span class="mono">${d.cost ? `단백질 ${d.cost}` : '무료'}</span><small>${d.desc} · ${d.place === 'membrane' ? '막' : '내부'} · 유지 ${d.upkeep}/s</small>`;
+      b.onclick = () => setTool(k);
       box.append(b);
     }
+    const rm = document.createElement('button');
+    rm.setAttribute('aria-pressed', tool === 'remove');
+    rm.innerHTML = `<span><kbd>X</kbd> 제거</span><span class="mono">전액 환불</span><small>우클릭 또는 우클릭 드래그로도 제거</small>`;
+    rm.onclick = () => setTool('remove');
+    box.append(rm);
+    $('dirHint').textContent = tool === 'belt' ? `방향 ${'동남서북'[toolDir]} · R 회전 · 드래그하면 이동 방향을 따름` : '';
   }
 
-  // 세포 행동
-  const act = $('actions');
   const specs = [];
-  const mk = (label, check, fn) => specs.push({ text: label + (check.ok ? '' : ` (${check.why})`), dis: !check.ok || sim.status !== 'running', fn });
+  const mk = (text, c, fn) => specs.push({ text: text + (c.ok ? '' : ` (${c.why})`), dis: !c.ok || sim.status !== 'running', fn });
   if (sim.stage === 'prokaryote') {
     const g = S.canGrow(sim);
     mk(`성장${g.ok ? ` · 단백질 ${g.cost}` : ''}`, g, () => S.grow(sim));
@@ -472,60 +469,64 @@ function updatePanel() {
   } else {
     mk(`세포분열 · 단백질 ${cfg.win.proteinForDivision}`, S.canDivide(sim), () => S.divide(sim));
   }
-  const actKey = specs.map((x) => x.text + x.dis).join('|');
-  if (act.dataset.k !== actKey) {
-    act.dataset.k = actKey; act.innerHTML = '';
-    for (const x of specs) {
-      const b = document.createElement('button');
-      b.textContent = x.text; b.disabled = x.dis; b.onclick = x.fn; act.append(b);
-    }
-  }
-  const made = atpHist.length > 1 ? (atpHist.at(-1) - atpHist[0]) / (atpHist.length - 1) : 0;
-  $('econ').textContent = `ATP 생산 ${made.toFixed(1)}/s · 유지비 ${S.totalUpkeep(sim).toFixed(1)}/s` + (sim.stage === 'prokaryote' ? ` (부피 ${(cfg.prokaryote.upkeepPerVolume * sim.size ** 3).toFixed(1)})` : '');
-
-  // 선택
-  const o = selected && sim.org.find((x) => x.id === selected);
-  $('selBox').hidden = !o;
-  if (o) {
-    const d = cfg.organelles[o.type];
-    const sel = $('sel');
-    const k = `${o.id}:${o.mode}:${Math.round(o.hp)}:${o.hijacked}`;
-    if (sel.dataset.k !== k) {
-      sel.dataset.k = k;
-      sel.innerHTML = `<div><strong>${d.label}</strong> <span class="mono">#${o.id} · 상태 ${Math.round(o.hp)}%</span></div>
-        <div class="mono" style="font-size:11px">${IO(d)} · ${d.rate}/s · 유지 ${d.upkeep}/s${o.hijacked ? ' · 바이러스 탈취됨' : ''}</div>
-        <div class="actions" style="margin-top:6px"></div>`;
-      const a = sel.querySelector('.actions');
-      if (o.type === 'transporter') {
-        for (const m of ['glucose', 'amino']) {
-          const b = document.createElement('button');
-          b.textContent = RES_LABEL[m]; b.setAttribute('aria-pressed', o.mode === m);
-          b.onclick = () => S.setMode(sim, o.id, m);
-          a.append(b);
-        }
-      }
-      if (!d.fixed) {
-        const b = document.createElement('button');
-        b.textContent = `해체 (단백질 +${Math.floor(d.cost / 2)})`;
-        b.onclick = () => { S.demolish(sim, o.id); selected = null; };
-        a.append(b);
-      }
-    }
+  const ak = specs.map((x) => x.text + x.dis).join('|');
+  const act = $('actions');
+  if (act.dataset.k !== ak) {
+    act.dataset.k = ak; act.innerHTML = '';
+    for (const x of specs) { const b = document.createElement('button'); b.textContent = x.text; b.disabled = x.dis; b.onclick = x.fn; act.append(b); }
   }
 
-  // 기록
-  const logKey = sim.log.length + ':' + (sim.log.at(-1)?.t ?? 0);
-  if ($('log').dataset.k !== logKey) {
-    $('log').dataset.k = logKey;
-    $('log').innerHTML = sim.log.slice(-12).reverse().map((l) => `<div>${fmt(l.t)} ${l.msg}</div>`).join('');
-  }
+  let e = selectedId && sim.ents.get(selectedId);
+  if (!e && selectedId) selectedId = null;
+  if (!e && hoverTile && !tool) e = S.entityAt(sim, hoverTile.x, hoverTile.y);
+  $('selBox').hidden = !e;
+  if (e) inspector(e);
 
-  // 종료
+  setHTML($('log'), sim.log.slice(-12).reverse().map((l) => `<div>${fmt(l.t)} ${l.msg}</div>`).join(''));
+
   if (sim.status !== 'running' && $('overlay').hidden) {
     $('overlay').hidden = false;
     $('ovTitle').textContent = sim.status === 'won' ? '세포분열 완료' : '세포 사멸';
     $('ovReason').textContent = sim.reason;
-    $('ovStats').textContent = `${fmt(sim.t)} · 누적 ATP ${sim.stats.atpMade} · 단백질 ${sim.stats.proteinMade}`;
+    $('ovStats').textContent = `${fmt(sim.t)} · 누적 ATP ${sim.stats.atpMade} · 단백질 납품 ${sim.stats.proteinDelivered}`;
+  }
+}
+
+function inspector(e) {
+  const d = S.def(sim, e.type);
+  const buf = (o) => Object.entries(o).filter(([, n]) => n > 0).map(([k, n]) => `${ITEM_LABEL[k]} ${n}`).join(', ') || '없음';
+  let html = `<div><strong>${e.type === 'hub' && sim.stage === 'prokaryote' ? d.labelProkaryote : d.label}</strong> <span class="mono">(${e.x}, ${e.y})</span></div>`;
+  if (e.type === 'belt') {
+    html += `<div class="mono small">방향 ${'동남서북'[e.dir]} · 적재 ${e.items.length} · ${e.blocked ? '정체' : '흐름'}</div>`;
+  } else {
+    html += `<div class="small">${d.desc}</div>`;
+    if (e.type !== 'hub') {
+      const outs = {};
+      for (const it of e.outBuf) outs[it] = (outs[it] || 0) + 1;
+      html += `<div class="mono small">상태: ${e.status}${e.hijacked ? ' · 바이러스 탈취' : ''} · 내구 ${Math.round(e.hp)}%</div>`;
+      html += `<div class="mono small">입력 ${buf(e.inBuf)} · 출력 ${buf(outs)}</div>`;
+    }
+  }
+  const sel = e.id === selectedId;
+  const k = html + sel + e.mode;
+  const el = $('sel');
+  if (el.dataset.k === k) return;
+  el.dataset.k = k;
+  el.innerHTML = html + (sel ? '<div class="actions" style="margin-top:6px"></div>' : '');
+  if (!sel) return;
+  const a = el.querySelector('.actions');
+  for (const m of d.modes || []) {
+    const b = document.createElement('button');
+    b.textContent = ITEM_LABEL[m]; b.setAttribute('aria-pressed', e.mode === m);
+    b.onclick = () => S.setMode(sim, e.id, m);
+    a.append(b);
+  }
+  if (e.type === 'belt') { const b = document.createElement('button'); b.textContent = '회전 (R)'; b.onclick = () => S.rotate(sim, e.x, e.y); a.append(b); }
+  if (!d.fixed) {
+    const b = document.createElement('button');
+    b.textContent = `제거${d.cost ? ` (단백질 +${d.cost})` : ''}`;
+    b.onclick = () => { S.remove(sim, e.x, e.y); selectedId = null; };
+    a.append(b);
   }
 }
 
