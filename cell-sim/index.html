@@ -97,7 +97,7 @@ kbd { font-family: var(--mono); font-size: 10px; border: 1px solid currentColor;
 </head>
 <body>
 <header>
-  <h1>세포 관리 시뮬레이션 <span class="mono" style="font-weight:400">v0.2</span></h1>
+  <h1>세포 관리 시뮬레이션 <span class="mono" style="font-weight:400">v0.3</span></h1>
   <span id="stageLabel">원핵세포</span>
   <span class="mono" id="clock">00:00</span>
   <span class="grow"></span>
@@ -109,7 +109,7 @@ kbd { font-family: var(--mono); font-size: 10px; border: 1px solid currentColor;
 <main>
   <div id="stage">
     <canvas id="cv" aria-label="세포 단면"></canvas>
-    <div id="hint">1–8 건물 선택 · 클릭 배치 · 미세소관은 드래그 · R 회전 · 우클릭 제거 · Esc 취소 · Space 일시정지</div>
+    <div id="hint">1–0 건물 선택 · 클릭 배치 · 미세소관은 드래그 · R 회전 · 우클릭 제거 · Esc 취소 · Space 일시정지</div>
     <div id="overlay" hidden><div><strong id="ovTitle"></strong><span id="ovReason"></span><span class="mono" id="ovStats"></span><button id="ovRestart">다시 시작</button></div></div>
   </div>
   <aside>
@@ -123,6 +123,10 @@ kbd { font-family: var(--mono); font-size: 10px; border: 1px solid currentColor;
       <h2>건설</h2>
       <div class="list build" id="build"></div>
       <div class="small" id="dirHint" style="margin-top:4px"></div>
+    </section>
+    <section>
+      <h2>유전자 발현 연구 <span class="mono" style="font-weight:400">진행 중 ATP 1/s</span></h2>
+      <div class="list build" id="research"></div>
     </section>
     <section>
       <h2>세포</h2>

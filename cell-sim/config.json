@@ -1,69 +1,289 @@
 {
-  "_note": "v0.2 팩토리형. 시간 단위 초, rate = 초당 반응 횟수. 아이템은 미세소관 위를 이동, ATP·O₂·막은 전역.",
+  "_note": "v0.3 팩토리형. 시간 단위 초, rate = 초당 반응 횟수. 아이템은 미세소관 위를 이동, ATP·O₂·막은 전역.",
   "tickHz": 10,
-  "grid": { "eukaryoteRadius": 12, "margin": 1 },
-  "caps": { "atp": 300, "o2": 30, "protein": 120, "waste": 60 },
-  "start": { "atp": 120, "o2": 15, "protein": 24, "waste": 0 },
-  "environment": { "o2Normal": 1.0, "o2DiffusionPerSec": 2.0, "glucoseSupply": 1.0 },
-  "excretion": { "prokaryotePerArea": 0.5, "eukaryote": 1.0 },
-  "membraneSynthesis": { "rate": 0.15, "protein": 1, "membrane": 2, "activeBelowMembrane": 90 },
-  "belt": { "speed": 2.0, "spacing": 0.25 },
+  "grid": {
+    "eukaryoteRadius": 12,
+    "margin": 1
+  },
+  "caps": {
+    "atp": 300,
+    "o2": 30,
+    "protein": 120,
+    "waste": 60
+  },
+  "start": {
+    "atp": 120,
+    "o2": 15,
+    "protein": 24,
+    "waste": 0
+  },
+  "environment": {
+    "o2Normal": 1.0,
+    "o2DiffusionPerSec": 2.0,
+    "glucoseSupply": 1.0
+  },
+  "excretion": {
+    "prokaryotePerArea": 0.5,
+    "eukaryote": 1.0
+  },
+  "membraneSynthesis": {
+    "rate": 0.15,
+    "protein": 1,
+    "membrane": 2,
+    "activeBelowMembrane": 90
+  },
+  "belt": {
+    "speed": 2.0,
+    "spacing": 0.25
+  },
   "machineBuffer": 2,
   "outputBuffer": 4,
   "buildings": {
     "belt": {
-      "label": "미세소관", "short": "", "key": "1", "cost": 0, "upkeep": 0.02, "place": "interior",
-      "stages": ["prokaryote", "eukaryote"], "desc": "아이템 운반. 드래그로 연속 설치, R로 방향"
+      "label": "미세소관",
+      "short": "",
+      "key": "1",
+      "cost": 0,
+      "upkeep": 0.02,
+      "place": "interior",
+      "stages": [
+        "prokaryote",
+        "eukaryote"
+      ],
+      "desc": "아이템 운반. 드래그로 연속 설치, R로 방향"
     },
     "transporter": {
-      "label": "막 수송체", "short": "수송", "key": "2", "cost": 2, "upkeep": 0.8, "place": "membrane", "rate": 0.5,
-      "atpIn": 1, "modes": ["glucose", "amino"], "stages": ["prokaryote", "eukaryote"], "desc": "ATP 1 → 포도당 또는 아미노산 1"
+      "label": "막 수송체",
+      "short": "수송",
+      "key": "2",
+      "cost": 2,
+      "upkeep": 0.8,
+      "place": "membrane",
+      "rate": 0.5,
+      "atpIn": 1,
+      "modes": [
+        "glucose",
+        "amino"
+      ],
+      "stages": [
+        "prokaryote",
+        "eukaryote"
+      ],
+      "desc": "ATP 1 → 포도당 또는 아미노산 1"
     },
     "glyco": {
-      "label": "해당 효소 군집", "short": "해당", "key": "3", "cost": 2, "upkeep": 0.3, "place": "interior", "rate": 1.0,
-      "in": { "glucose": 1 }, "out": { "pyruvate": 2 }, "atpOut": 2, "fermentWhenBlocked": { "waste": 2 },
-      "stages": ["prokaryote", "eukaryote"], "desc": "포도당 1 → 피루브산 2 + ATP 2. 출구가 막히면 발효(세포질 폐기물 2)"
+      "label": "해당 효소 군집",
+      "short": "해당",
+      "key": "3",
+      "cost": 2,
+      "upkeep": 0.3,
+      "place": "interior",
+      "rate": 1.0,
+      "in": {
+        "glucose": 1
+      },
+      "out": {
+        "pyruvate": 2
+      },
+      "atpOut": 2,
+      "fermentWhenBlocked": {
+        "waste": 2
+      },
+      "stages": [
+        "prokaryote",
+        "eukaryote"
+      ],
+      "desc": "포도당 1 → 피루브산 2 + ATP 2. 출구가 막히면 발효(세포질 폐기물 2)"
     },
     "ribosome": {
-      "label": "리보솜", "short": "리보", "key": "4", "cost": 3, "upkeep": 1.5, "place": "interior", "rate": 0.5,
-      "in": { "amino": 3 }, "atpIn": 4, "out": { "protein": 1 },
-      "stages": ["prokaryote", "eukaryote"], "desc": "아미노산 3 + ATP 4 → 단백질 1"
+      "label": "리보솜",
+      "short": "리보",
+      "key": "4",
+      "cost": 3,
+      "upkeep": 1.5,
+      "place": "interior",
+      "rate": 0.5,
+      "in": {
+        "amino": 3
+      },
+      "atpIn": 4,
+      "out": {
+        "protein": 1
+      },
+      "stages": [
+        "prokaryote",
+        "eukaryote"
+      ],
+      "desc": "아미노산 3 + ATP 4 → 단백질 1"
     },
     "respChain": {
-      "label": "막 호흡 복합체", "short": "호흡", "key": "5", "cost": 4, "upkeep": 1.5, "place": "membrane", "rate": 0.5,
-      "in": { "pyruvate": 2 }, "o2In": 1, "atpOut": 28, "wasteToPool": 1,
-      "stages": ["prokaryote"], "desc": "피루브산 2 + O₂ → ATP 28 + 세포질 폐기물 1"
+      "label": "막 호흡 복합체",
+      "short": "호흡",
+      "key": "5",
+      "cost": 4,
+      "upkeep": 1.5,
+      "place": "membrane",
+      "rate": 0.5,
+      "in": {
+        "pyruvate": 2
+      },
+      "o2In": 1,
+      "atpOut": 28,
+      "wasteToPool": 1,
+      "stages": [
+        "prokaryote"
+      ],
+      "desc": "피루브산 2 + O₂ → ATP 28 + 세포질 폐기물 1"
     },
     "mitochondrion": {
-      "label": "미토콘드리아", "short": "미토", "key": "5", "cost": 8, "upkeep": 2.5, "place": "interior", "w": 2, "h": 2, "rate": 0.5,
-      "in": { "pyruvate": 2 }, "o2In": 1, "atpOut": 28, "out": { "waste": 1 },
-      "stages": ["eukaryote"], "desc": "피루브산 2 + O₂ → ATP 28 + 폐기물 1"
+      "label": "미토콘드리아",
+      "short": "미토",
+      "key": "5",
+      "cost": 8,
+      "upkeep": 2.5,
+      "place": "interior",
+      "w": 2,
+      "h": 2,
+      "rate": 0.5,
+      "in": {
+        "pyruvate": 2
+      },
+      "o2In": 1,
+      "atpOut": 28,
+      "out": {
+        "waste": 1
+      },
+      "stages": [
+        "eukaryote"
+      ],
+      "desc": "피루브산 2 + O₂ → ATP 28 + 폐기물 1"
     },
     "lysosome": {
-      "label": "리소좀", "short": "리소", "key": "6", "cost": 5, "upkeep": 1.2, "place": "interior", "rate": 0.5,
-      "in": { "waste": 3 }, "out": { "amino": 1 }, "poolDrainPerSec": 0.6,
-      "stages": ["eukaryote"], "desc": "폐기물 3 → 아미노산 1. 세포질 폐기물도 흡수. 침투 바이러스 우선 분해"
+      "label": "리소좀",
+      "short": "리소",
+      "key": "6",
+      "cost": 5,
+      "upkeep": 1.2,
+      "place": "interior",
+      "rate": 0.5,
+      "in": {
+        "waste": 3
+      },
+      "out": {
+        "amino": 1
+      },
+      "poolDrainPerSec": 0.6,
+      "stages": [
+        "eukaryote"
+      ],
+      "desc": "폐기물 3 → 아미노산 1. 세포질 폐기물도 흡수. 침투 바이러스 우선 분해"
     },
     "golgi": {
-      "label": "골지체", "short": "골지", "key": "7", "cost": 6, "upkeep": 1.2, "place": "interior", "w": 2, "h": 2, "rate": 0.5,
-      "in": { "protein": 2 }, "membraneOut": 1, "activeBelowMembrane": 95,
-      "stages": ["eukaryote"], "desc": "단백질 2 → 세포막 +1"
+      "label": "골지체",
+      "short": "골지",
+      "key": "7",
+      "cost": 6,
+      "upkeep": 1.2,
+      "place": "interior",
+      "w": 2,
+      "h": 2,
+      "rate": 0.5,
+      "in": {
+        "protein": 2
+      },
+      "membraneOut": 1,
+      "activeBelowMembrane": 95,
+      "stages": [
+        "eukaryote"
+      ],
+      "desc": "단백질 2 → 세포막 +1"
     },
     "exporter": {
-      "label": "배출 펌프", "short": "배출", "key": "8", "cost": 2, "upkeep": 0.4, "place": "membrane", "rate": 2.0,
-      "in": { "waste": 1 }, "stages": ["prokaryote", "eukaryote"], "desc": "미세소관으로 받은 폐기물을 세포 밖으로"
+      "label": "배출 펌프",
+      "short": "배출",
+      "key": "8",
+      "cost": 2,
+      "upkeep": 0.4,
+      "place": "membrane",
+      "rate": 2.0,
+      "in": {
+        "waste": 1
+      },
+      "stages": [
+        "prokaryote",
+        "eukaryote"
+      ],
+      "desc": "미세소관으로 받은 폐기물을 세포 밖으로"
     },
     "hub": {
-      "label": "핵", "labelProkaryote": "핵양체", "short": "핵", "cost": 0, "upkeep": 2.0, "upkeepProkaryote": 0.5,
-      "place": "interior", "w": 3, "h": 3, "fixed": true, "accepts": ["protein"], "stages": [],
+      "label": "핵",
+      "labelProkaryote": "핵양체",
+      "short": "핵",
+      "cost": 0,
+      "upkeep": 2.0,
+      "upkeepProkaryote": 0.5,
+      "place": "interior",
+      "w": 3,
+      "h": 3,
+      "fixed": true,
+      "accepts": [
+        "protein"
+      ],
+      "stages": [],
       "desc": "단백질 납품처. 저장된 단백질로 건설. 파괴 시 패배"
+    },
+    "splitter": {
+      "label": "분배기",
+      "short": "분배",
+      "key": "9",
+      "cost": 2,
+      "upkeep": 0.1,
+      "place": "interior",
+      "research": "splitter",
+      "stages": [
+        "prokaryote",
+        "eukaryote"
+      ],
+      "desc": "들어온 아이템을 바깥쪽 미세소관들에 번갈아 분배"
+    },
+    "filter": {
+      "label": "선별기",
+      "short": "선별",
+      "key": "0",
+      "cost": 3,
+      "upkeep": 0.2,
+      "place": "interior",
+      "research": "filter",
+      "modes": [
+        "glucose",
+        "amino",
+        "pyruvate",
+        "protein",
+        "waste"
+      ],
+      "stages": [
+        "prokaryote",
+        "eukaryote"
+      ],
+      "desc": "지정 아이템은 정면(화살표) 미세소관으로, 나머지는 옆으로. R로 방향"
     }
   },
   "prokaryote": {
-    "radii": [5, 7, 9],
+    "radii": [
+      5,
+      7,
+      9
+    ],
     "upkeepPerVolume": 0.4,
-    "growCost": [10, 18],
-    "symbiosis": { "proteinCost": 20, "atpCost": 60, "integrationSec": 20 }
+    "growCost": [
+      10,
+      18
+    ],
+    "symbiosis": {
+      "proteinCost": 20,
+      "atpCost": 60,
+      "integrationSec": 20
+    }
   },
   "homeostasis": {
     "criticalSec": 30,
@@ -77,16 +297,85 @@
     "leakFractionPerSec": 0.05,
     "hp": 100
   },
-  "win": { "proteinForDivision": 50 },
+  "win": {
+    "proteinForDivision": 50
+  },
   "threats": {
     "warningSec": 15,
     "firstAtSec": 90,
-    "intervalSec": [50, 80],
-    "hypoxia": { "label": "저산소", "durationSec": 40, "o2Env": 0.15 },
-    "starvation": { "label": "영양 결핍", "durationSec": 40, "glucoseFactor": 0.5 },
+    "intervalSec": [
+      50,
+      80
+    ],
+    "hypoxia": {
+      "label": "저산소",
+      "durationSec": 40,
+      "o2Env": 0.15
+    },
+    "starvation": {
+      "label": "영양 결핍",
+      "durationSec": 40,
+      "glucoseFactor": 0.5
+    },
     "virus": {
-      "label": "바이러스 침입", "durationSec": 20, "particles": 3,
-      "membraneDamagePerParticlePerSec": 0.8, "infiltrateBelowMembrane": 50, "infiltrateChancePerSec": 0.15
+      "label": "바이러스 침입",
+      "durationSec": 20,
+      "particles": 3,
+      "membraneDamagePerParticlePerSec": 0.8,
+      "infiltrateBelowMembrane": 50,
+      "infiltrateChancePerSec": 0.15
+    }
+  },
+  "research": {
+    "atpPerSec": 1.0,
+    "nodes": {
+      "splitter": {
+        "label": "분배 단백질",
+        "cost": 6,
+        "sec": 20,
+        "requires": [],
+        "desc": "분배기 건설 해금"
+      },
+      "filter": {
+        "label": "선별 수송 신호",
+        "cost": 8,
+        "sec": 25,
+        "requires": [
+          "splitter"
+        ],
+        "desc": "선별기 건설 해금"
+      },
+      "motors": {
+        "label": "고속 운동 단백질",
+        "cost": 10,
+        "sec": 30,
+        "requires": [
+          "splitter"
+        ],
+        "desc": "미세소관 속도 ×1.5"
+      },
+      "conditional": {
+        "label": "조건부 발현",
+        "cost": 8,
+        "sec": 25,
+        "requires": [],
+        "desc": "멈춘 기계의 유지비 ×0.3 (입력 대기·출구 막힘 시 유전자 발현 억제)"
+      },
+      "chaperone": {
+        "label": "샤페론",
+        "cost": 12,
+        "sec": 35,
+        "requires": [
+          "conditional"
+        ],
+        "desc": "소기관 내구도 1/s 회복, 세포막 마모 ×0.6"
+      }
+    },
+    "effects": {
+      "motorsSpeed": 1.5,
+      "idleUpkeepFactor": 0.3,
+      "chaperoneRegen": 1.0,
+      "chaperoneWear": 0.6
     }
   }
 }

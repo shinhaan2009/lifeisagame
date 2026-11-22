@@ -1,4 +1,4 @@
-// 세포 관리 시뮬레이션 v0.2 — 팩토리형 시뮬레이션 코어.
+// 세포 관리 시뮬레이션 v0.3 — 팩토리형 시뮬레이션 코어.
 // 타일 그리드 위에 소기관(기계)과 미세소관(운반 라인)을 배치한다.
 // 아이템(포도당·아미노산·피루브산·단백질·폐기물)은 미세소관 위를 실제로 이동한다.
 // ATP·O₂·세포막 내구도·세포질 폐기물은 전역 값이다. DOM 의존 없음, 고정 틱.
@@ -43,6 +43,7 @@ export function createSim(cfg, { seed = 1, starter = true } = {}) {
     threat: { pending: null, active: [] },
     virus: { outside: 0, inside: 0, decay: 0 },
     symbiosis: null,
+    research: { done: [], current: null },
     log: [],
     stats: { atpMade: 0, proteinDelivered: 0 },
   };
@@ -129,12 +130,53 @@ export const count = (s, type) => [...s.ents.values()].filter((e) => e.type === 
 
 export function totalUpkeep(s) {
   let u = 0;
+  const idleF = researched(s, 'conditional') ? s.cfg.research.effects.idleUpkeepFactor : 1;
   for (const e of s.ents.values()) {
     const d = def(s, e.type);
-    u += e.type === 'hub' && s.stage === 'prokaryote' ? d.upkeepProkaryote : d.upkeep;
+    const base = e.type === 'hub' && s.stage === 'prokaryote' ? d.upkeepProkaryote : d.upkeep;
+    u += isIdle(e) ? base * idleF : base;
   }
   if (s.stage === 'prokaryote') u += s.cfg.prokaryote.upkeepPerVolume * s.size ** 3;
+  if (s.research.current) u += s.cfg.research.atpPerSec;
   return u;
+}
+
+export const isIdle = (e) => e.type !== 'hub' && e.type !== 'belt' && /대기|부족|막힘|포화/.test(e.status || '') && !/작동/.test(e.status || '');
+
+// ---------- 연구 (유전자 발현) ----------
+
+export const researched = (s, id) => s.research.done.includes(id);
+
+export function canResearch(s, id) {
+  const n = s.cfg.research.nodes[id];
+  if (!n) return { ok: false, why: '없음' };
+  if (researched(s, id)) return { ok: false, why: '완료' };
+  if (s.research.current) return { ok: false, why: '다른 연구 진행 중' };
+  const miss = n.requires.filter((r) => !researched(s, r));
+  if (miss.length) return { ok: false, why: `선행: ${miss.map((r) => s.cfg.research.nodes[r].label).join(', ')}` };
+  if (s.res.protein < n.cost) return { ok: false, why: `단백질 ${n.cost} 필요` };
+  return { ok: true };
+}
+
+export function startResearch(s, id) {
+  if (!canResearch(s, id).ok || s.status !== 'running') return false;
+  const n = s.cfg.research.nodes[id];
+  s.res.protein -= n.cost;
+  s.research.current = { id, elapsed: 0, duration: n.sec };
+  log(s, `유전자 발현 연구 시작: ${n.label}`);
+  return true;
+}
+
+function updateResearch(s, dt) {
+  const c = s.research.current;
+  if (!c) return;
+  if (s.res.atp <= 0) return; // ATP 없으면 진행 정지
+  c.elapsed += dt;
+  if (c.elapsed >= c.duration) {
+    s.research.done.push(c.id);
+    s.research.current = null;
+    log(s, `연구 완료: ${s.cfg.research.nodes[c.id].label}`);
+  }
 }
 
 export const wasteRatio = (s) => s.res.waste / s.cfg.caps.waste;
@@ -145,6 +187,7 @@ export function canPlace(s, type, x, y) {
   const d = def(s, type);
   if (!d || d.fixed) return { ok: false, why: '건설 불가' };
   if (!d.stages.includes(s.stage)) return { ok: false, why: '현재 단계에서 불가' };
+  if (d.research && !researched(s, d.research)) return { ok: false, why: `연구 필요: ${s.cfg.research.nodes[d.research].label}` };
   if (s.res.protein < d.cost) return { ok: false, why: `단백질 ${d.cost} 필요` };
   const [w, h] = dims(s, type);
   for (let i = 0; i < w; i++) for (let j = 0; j < h; j++) {
@@ -179,7 +222,7 @@ export function remove(s, x, y) {
 
 export function rotate(s, x, y) {
   const e = entityAt(s, x, y);
-  if (e && e.type === 'belt') e.dir = (e.dir + 1) % 4;
+  if (e && (e.type === 'belt' || e.type === 'filter')) e.dir = (e.dir + 1) % 4;
 }
 
 export function setMode(s, id, mode) {
@@ -308,12 +351,14 @@ function beltHasRoom(s, b) {
 export function accepts(s, e, item) {
   const d = def(s, e.type);
   if (e.type === 'hub') return d.accepts.includes(item) && s.res.protein < s.cfg.caps.protein;
+  if (e.type === 'splitter' || e.type === 'filter') return e.outBuf.length < 2;
   if (!d.in || !(item in d.in)) return false;
   return (e.inBuf[item] || 0) < Math.max(4, d.in[item] * s.cfg.machineBuffer);
 }
 
 function deliver(s, e, item) {
   if (e.type === 'hub') { s.res.protein++; s.stats.proteinDelivered++; return; }
+  if (e.type === 'splitter' || e.type === 'filter') { e.outBuf.push(item); return; }
   e.inBuf[item] = (e.inBuf[item] || 0) + 1;
 }
 
@@ -330,6 +375,20 @@ function pushOutputs(s, e) {
     if (inside(e, b.x + dx, b.y + dy)) continue;
     cands.push(b);
   }
+  if (e.type === 'filter') {
+    // 지정 아이템은 정면, 나머지는 정면 외 출구로
+    const [fx, fy] = DIRS[e.dir];
+    const front = cands.filter((b) => b.x === e.x + fx && b.y === e.y + fy);
+    const side = cands.filter((b) => !(b.x === e.x + fx && b.y === e.y + fy));
+    const item = e.outBuf[0];
+    const pool = item === e.mode ? front : side;
+    for (let k = 0; k < pool.length; k++) {
+      const b = pool[(e.rr + k) % pool.length];
+      if (beltHasRoom(s, b)) { b.items.push({ type: e.outBuf.shift(), pos: 0 }); e.rr = (e.rr + k + 1) % Math.max(1, pool.length); break; }
+    }
+    e.status = e.outBuf.length >= 2 ? '출구 막힘' : '작동';
+    return;
+  }
   for (let k = 0; k < cands.length && e.outBuf.length; k++) {
     const b = cands[(e.rr + k) % cands.length];
     if (beltHasRoom(s, b)) {
@@ -339,8 +398,11 @@ function pushOutputs(s, e) {
   }
 }
 
+export const beltSpeed = (s) => s.cfg.belt.speed * (researched(s, 'motors') ? s.cfg.research.effects.motorsSpeed : 1);
+
 function moveBelts(s, dt) {
-  const { speed, spacing } = s.cfg.belt;
+  const { spacing } = s.cfg.belt;
+  const speed = beltSpeed(s);
   for (const b of s.ents.values()) {
     if (b.type !== 'belt') continue;
     if (!b.items.length) { b.blocked = false; continue; }
@@ -458,6 +520,7 @@ export function step(s) {
   s.tick++;
 
   updateThreats(s, dt);
+  updateResearch(s, dt);
 
   const wasteCrit = wasteRatio(s) > H.wasteCriticalRatio;
   const eff = (wasteCrit ? H.wasteEfficiency : 1) * (s.res.atp <= 0 ? 0.25 : 1);
@@ -473,6 +536,11 @@ export function step(s) {
   // 기계
   for (const e of s.ents.values()) {
     if (e.type === 'belt' || e.type === 'hub') continue;
+    if (e.type === 'splitter' || e.type === 'filter') {
+      pushOutputs(s, e);
+      if (e.type === 'splitter') e.status = e.outBuf.length >= 2 ? '출구 막힘' : '작동';
+      continue;
+    }
     const d = def(s, e.type);
     let rate = d.rate;
     if (e.type === 'transporter' && e.mode === 'glucose') rate *= s.env.glucose;
@@ -511,7 +579,11 @@ export function step(s) {
   while (s.acc.upkeep >= 1) { s.acc.upkeep--; if (s.res.atp > 0) s.res.atp--; }
 
   // 세포막: 마모 + 바이러스
-  s.membrane -= H.membraneWearPerSec * dt;
+  const chap = researched(s, 'chaperone');
+  s.membrane -= H.membraneWearPerSec * (chap ? cfg.research.effects.chaperoneWear : 1) * dt;
+  if (chap && !wasteCrit) {
+    for (const e of s.ents.values()) if (e.hp < H.hp) e.hp = Math.min(H.hp, e.hp + cfg.research.effects.chaperoneRegen * dt);
+  }
   const V = cfg.threats.virus;
   if (s.virus.outside > 0) {
     s.membrane -= V.membraneDamagePerParticlePerSec * s.virus.outside * dt;

@@ -1,5 +1,8 @@
-// 세포 관리 시뮬레이션 v0.2 — 그리드 렌더링·입력·패널. 시뮬레이션은 sim.js.
+// 세포 관리 시뮬레이션 v0.3 — 그리드 렌더링·입력·패널. 시뮬레이션은 sim.js.
 import * as S from './sim.js';
+import { Space } from './space.js';
+
+const space = new Space();
 
 const $ = (id) => document.getElementById(id);
 const cv = $('cv');
@@ -44,7 +47,8 @@ function restart() {
 function layout() {
   const r = cv.getBoundingClientRect();
   const T = Math.max(8, Math.floor(Math.min(r.width, r.height) / (2 * viewR + 1)));
-  return { W: r.width, H: r.height, T, cx: Math.round(r.width / 2), cy: Math.round(r.height / 2) };
+  const [bx, by] = space.bob();
+  return { W: r.width, H: r.height, T, cx: Math.round(r.width / 2 + bx), cy: Math.round(r.height / 2 + by) };
 }
 const tileCenter = (L, x, y) => [L.cx + x * L.T, L.cy + y * L.T];
 function screenToTile(px, py) {
@@ -119,7 +123,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === ' ') { e.preventDefault(); togglePause(); }
   else if (k === 'r') {
     const h = hoverTile && S.entityAt(sim, hoverTile.x, hoverTile.y);
-    if (!toolType() && h && h.type === 'belt') S.rotate(sim, h.x, h.y);
+    if (!toolType() && h && (h.type === 'belt' || h.type === 'filter')) S.rotate(sim, h.x, h.y);
     else { toolDir = (toolDir + 1) % 4; lastHotKey = ''; }
   } else if (k === 'x') setTool('remove');
   else {
@@ -153,6 +157,7 @@ function frame(now) {
       if (sim.tick % cfg.tickHz === 0) { atpHist.push(sim.stats.atpMade); if (atpHist.length > 6) atpHist.shift(); }
     }
   }
+  if (!paused && sim.status === 'running') space.update(dt * speed);
   viewR += (S.radius(sim) + 2 - viewR) * Math.min(1, dt * 3);
   render(now / 1000);
   updatePanel();
@@ -199,18 +204,16 @@ function render(t) {
   const ext = Math.ceil(Math.max(L.W, L.H) / T / 2) + 1;
   const R = S.radius(sim);
 
-  // 환경 O₂ 점묘 + 내부 격자
-  ctx.lineWidth = 1;
+  // 배경 공간 → 세포 내부를 덮고 격자
+  space.resize(L.W, L.H);
+  space.draw(ctx, { o2: sim.env.o2, glucose: sim.env.glucose, virus: sim.threat.active.some((a) => a.type === 'virus') });
+  ctx.fillStyle = BG;
+  ctx.beginPath(); ctx.arc(L.cx, L.cy, R * T, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = 1; ctx.strokeStyle = GRID;
   for (let x = -ext; x <= ext; x++) for (let y = -ext; y <= ext; y++) {
+    if (S.tileKind(sim, x, y) !== 'interior') continue;
     const [px, py] = tileCenter(L, x, y);
-    const k = S.tileKind(sim, x, y);
-    if (k === 'env') {
-      const hsh = Math.abs((x * 73856093) ^ (y * 19349663));
-      if ((hsh % 100) / 100 < 0.35 * sim.env.o2) { ctx.fillStyle = DIM; ctx.fillRect(px + (hsh % 7) - 3, py + ((hsh >> 4) % 7) - 3, 1.5, 1.5); }
-    } else if (k === 'interior') {
-      ctx.strokeStyle = GRID;
-      ctx.strokeRect(px - T / 2 + 0.5, py - T / 2 + 0.5, T - 1, T - 1);
-    }
+    ctx.strokeRect(px - T / 2 + 0.5, py - T / 2 + 0.5, T - 1, T - 1);
   }
   const tt = toolType();
   if (tt && S.def(sim, tt).place === 'membrane') {
@@ -261,7 +264,7 @@ function render(t) {
       if (!ok) ctx.setLineDash([4, 3]);
       ctx.strokeRect(px - T / 2 + 1, py - T / 2 + 1, w * T - 2, h * T - 2);
       ctx.setLineDash([]); ctx.lineWidth = 1.5;
-      if (tt === 'belt') arrow(px, py, toolDir, T * 0.32);
+      if (tt === 'belt' || tt === 'filter') arrow(px, py, toolDir, T * 0.32);
       ctx.lineWidth = 1;
       if (!ok) label(c.why, px + (w - 1) * T / 2, py - T * 0.95);
     } else {
@@ -314,7 +317,7 @@ function drawBelt(b, L, t) {
   }
   ctx.stroke();
   // 흐름 셰브론: 정체 시 멈춘다
-  const phase = b.blocked ? 0.25 : (t * cfg.belt.speed) % 1;
+  const phase = b.blocked ? 0.25 : (t * S.beltSpeed(sim)) % 1;
   ctx.strokeStyle = CHEV;
   for (const k of [0, 0.5]) {
     const o = ((phase + k) % 1) - 0.5;
@@ -366,6 +369,15 @@ function drawMachine(e, L) {
     arrow(cx, cy + T * 0.08, e.type === 'transporter' ? e.dir : (e.dir + 2) % 4, T * 0.22);
     ctx.font = `600 ${fs * 0.85}px "IBM Plex Sans KR", system-ui, sans-serif`;
     ctx.fillText(e.type === 'exporter' ? '배출' : e.mode === 'glucose' ? '포' : '아', cx, cy - T * 0.2);
+  } else if (e.type === 'splitter') {
+    ctx.beginPath(); ctx.moveTo(cx - T * 0.25, cy); ctx.lineTo(cx + T * 0.25, cy); ctx.moveTo(cx, cy - T * 0.25); ctx.lineTo(cx, cy + T * 0.25); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, T * 0.08, 0, 7); ctx.fill();
+  } else if (e.type === 'filter') {
+    ctx.lineWidth = 1.5;
+    arrow(cx, cy, e.dir, T * 0.3);
+    const [fx, fy] = S.DIRS[e.dir];
+    ctx.strokeStyle = FG; ctx.lineWidth = 1;
+    drawToken(ctx, cx - fx * T * 0.18, cy - fy * T * 0.18, e.mode, Math.max(2.5, T * 0.11));
   } else if (e.type === 'respChain') {
     ctx.beginPath(); ctx.moveTo(cx, cy - T * 0.26); ctx.lineTo(cx + T * 0.24, cy + T * 0.18); ctx.lineTo(cx - T * 0.24, cy + T * 0.18); ctx.closePath(); ctx.stroke();
   } else if (e.type === 'mitochondrion') {
@@ -438,7 +450,7 @@ function updatePanel() {
 
   // 핫바
   const types = Object.keys(cfg.buildings).filter((k) => cfg.buildings[k].stages.includes(sim.stage));
-  const key = types.map((k) => `${k}${sim.res.protein >= cfg.buildings[k].cost}${S.count(sim, k)}`).join('|') + tool + toolDir + sim.stage;
+  const key = types.map((k) => `${k}${sim.res.protein >= cfg.buildings[k].cost}${S.count(sim, k)}`).join('|') + tool + toolDir + sim.stage + sim.research.done.join();
   if (key !== lastHotKey) {
     lastHotKey = key;
     const box = $('build'); box.innerHTML = '';
@@ -446,8 +458,9 @@ function updatePanel() {
       const d = cfg.buildings[k];
       const b = document.createElement('button');
       b.setAttribute('aria-pressed', tool === k);
-      b.disabled = sim.res.protein < d.cost && tool !== k;
-      b.innerHTML = `<span><kbd>${d.key}</kbd> ${d.label}${d.w ? ` <span class="mono">${d.w}×${d.h}</span>` : ''} <span class="mono">×${S.count(sim, k)}</span></span><span class="mono">${d.cost ? `단백질 ${d.cost}` : '무료'}</span><small>${d.desc} · ${d.place === 'membrane' ? '막' : '내부'} · 유지 ${d.upkeep}/s</small>`;
+      const locked = d.research && !S.researched(sim, d.research);
+      b.disabled = (sim.res.protein < d.cost || locked) && tool !== k;
+      b.innerHTML = `<span><kbd>${d.key}</kbd> ${d.label}${d.w ? ` <span class="mono">${d.w}×${d.h}</span>` : ''} <span class="mono">×${S.count(sim, k)}</span></span><span class="mono">${d.cost ? `단백질 ${d.cost}` : '무료'}</span><small>${locked ? `잠김: ${cfg.research.nodes[d.research].label} 연구 필요 · ` : ''}${d.desc} · ${d.place === 'membrane' ? '막' : '내부'} · 유지 ${d.upkeep}/s</small>`;
       b.onclick = () => setTool(k);
       box.append(b);
     }
@@ -456,7 +469,7 @@ function updatePanel() {
     rm.innerHTML = `<span><kbd>X</kbd> 제거</span><span class="mono">전액 환불</span><small>우클릭 또는 우클릭 드래그로도 제거</small>`;
     rm.onclick = () => setTool('remove');
     box.append(rm);
-    $('dirHint').textContent = tool === 'belt' ? `방향 ${'동남서북'[toolDir]} · R 회전 · 드래그하면 이동 방향을 따름` : '';
+    $('dirHint').textContent = tool === 'belt' || tool === 'filter' ? `방향 ${'동남서북'[toolDir]} · R 회전 · 드래그하면 이동 방향을 따름` : '';
   }
 
   const specs = [];
@@ -474,6 +487,25 @@ function updatePanel() {
   if (act.dataset.k !== ak) {
     act.dataset.k = ak; act.innerHTML = '';
     for (const x of specs) { const b = document.createElement('button'); b.textContent = x.text; b.disabled = x.dis; b.onclick = x.fn; act.append(b); }
+  }
+
+  // 유전자 발현 연구
+  const R = cfg.research.nodes, cur = sim.research.current;
+  const rk = Object.keys(R).map((id) => id + S.canResearch(sim, id).ok + S.researched(sim, id)).join('|') + (cur ? cur.id + Math.floor(cur.elapsed) : '');
+  const rb = $('research');
+  if (rb.dataset.k !== rk) {
+    rb.dataset.k = rk; rb.innerHTML = '';
+    for (const [id, n] of Object.entries(R)) {
+      const c = S.canResearch(sim, id), done = S.researched(sim, id), on = cur && cur.id === id;
+      const b = document.createElement('button');
+      b.disabled = !c.ok;
+      b.setAttribute('aria-pressed', done);
+      const tail = done ? '완료' : on ? `${Math.floor(cur.elapsed)}/${n.sec}s` : `단백질 ${n.cost} · ${n.sec}s`;
+      b.innerHTML = `<span>${n.label}</span><span class="mono">${tail}</span><small>${n.desc}${!done && !on && !c.ok ? ' · ' + c.why : ''}</small>`;
+      if (on) b.style.backgroundImage = `linear-gradient(90deg, rgba(0,0,0,.12) ${(cur.elapsed / cur.duration) * 100}%, transparent 0)`;
+      b.onclick = () => { S.startResearch(sim, id); lastHotKey = ''; };
+      rb.append(b);
+    }
   }
 
   let e = selectedId && sim.ents.get(selectedId);
@@ -521,7 +553,7 @@ function inspector(e) {
     b.onclick = () => S.setMode(sim, e.id, m);
     a.append(b);
   }
-  if (e.type === 'belt') { const b = document.createElement('button'); b.textContent = '회전 (R)'; b.onclick = () => S.rotate(sim, e.x, e.y); a.append(b); }
+  if (e.type === 'belt' || e.type === 'filter') { const b = document.createElement('button'); b.textContent = '회전 (R)'; b.onclick = () => S.rotate(sim, e.x, e.y); a.append(b); }
   if (!d.fixed) {
     const b = document.createElement('button');
     b.textContent = `제거${d.cost ? ` (단백질 +${d.cost})` : ''}`;

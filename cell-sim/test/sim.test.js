@@ -109,3 +109,64 @@ test('결정적 시드 재현', () => {
   run(a, 180); run(b, 180);
   assert.deepEqual(a.res, b.res);
 });
+
+test('연구 전에는 분배기 건설 불가, 연구 후 가능', () => {
+  const s = S.createSim(calm(cfg()));
+  s.res.protein = 100;
+  assert.match(S.canPlace(s, 'splitter', 2, -2).why, /연구/);
+  assert.equal(S.canResearch(s, 'filter').ok, false); // 선행 미충족
+  assert.ok(S.startResearch(s, 'splitter'));
+  assert.equal(S.canResearch(s, 'motors').ok, false); // 진행 중
+  run(s, 21);
+  assert.ok(S.researched(s, 'splitter'));
+  assert.ok(S.canPlace(s, 'splitter', 2, -2).ok);
+});
+
+function factory() {
+  const c = calm(cfg()); c.prokaryote.upkeepPerVolume = 0;
+  const s = S.createSim(c, { starter: false });
+  s.res.protein = 100; s.res.atp = 300;
+  s.research.done.push('splitter', 'filter');
+  return s;
+}
+
+test('분배기는 두 출구로 번갈아 보낸다', () => {
+  const s = factory();
+  S.place(s, 'transporter', 5, 0);
+  S.place(s, 'belt', 4, 0, 2);
+  S.place(s, 'splitter', 3, 0);
+  S.place(s, 'belt', 3, -1, 3);
+  S.place(s, 'belt', 3, 1, 1);
+  run(s, 6);
+  const n = S.entityAt(s, 3, -1).items.length, m = S.entityAt(s, 3, 1).items.length;
+  assert.ok(n >= 1 && m >= 1 && Math.abs(n - m) <= 1, `${n} vs ${m}`);
+});
+
+test('선별기: 지정 아이템은 정면, 나머지는 옆', () => {
+  const s = factory();
+  S.place(s, 'transporter', 5, 0);
+  const t2 = S.place(s, 'transporter', 3, 4);
+  S.setMode(s, t2.id, 'amino');
+  S.place(s, 'belt', 4, 0, 2);
+  S.place(s, 'belt', 3, 3, 3);
+  S.place(s, 'belt', 3, 2, 3);
+  S.place(s, 'belt', 3, 1, 3); // (3,0)으로 올라감
+  const f = S.place(s, 'filter', 3, 0, 2); // 정면 = 서쪽
+  S.setMode(s, f.id, 'amino');
+  S.place(s, 'belt', 2, 0, 2);  // 정면 출구
+  S.place(s, 'belt', 3, -1, 3); // 옆 출구
+  run(s, 12);
+  const front = S.entityAt(s, 2, 0).items.map((i) => i.type);
+  const side = S.entityAt(s, 3, -1).items.map((i) => i.type);
+  assert.ok(front.length && front.every((t) => t === 'amino'), JSON.stringify(front));
+  assert.ok(side.length && side.every((t) => t === 'glucose'), JSON.stringify(side));
+});
+
+test('조건부 발현: 멈춘 기계 유지비 감소', () => {
+  const s = factory();
+  S.place(s, 'ribosome', 2, -2);
+  S.step(s);
+  const before = S.totalUpkeep(s);
+  s.research.done.push('conditional');
+  assert.ok(S.totalUpkeep(s) < before);
+});
